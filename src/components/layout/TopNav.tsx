@@ -1,5 +1,6 @@
 import clsx from 'clsx'
 import { BookOpen, Languages, Play, Settings } from 'lucide-react'
+import brandIconUrl from '../../assets/cutscenes/water.png'
 import type { Locale } from '../../lib/i18n'
 import { uiText } from '../../lib/i18n'
 import { triggerRipple } from '../../lib/ripple'
@@ -28,7 +29,6 @@ export function TopNav({
   navLocked = false,
 }: TopNavProps) {
   const copy = uiText[locale]
-  const brandIconUrl = `${import.meta.env.BASE_URL}site-icon.png`
   const navItems = [
     { id: sectionIds[0], label: copy.navHome },
     { id: sectionIds[1], label: copy.navPrograms },
