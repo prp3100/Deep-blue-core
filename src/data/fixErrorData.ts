@@ -30,13 +30,15 @@ type FixErrorQuestionSpec = {
   culpritLine: LineNumber
   hint: LocalizedText
   explanation: LocalizedText
+  patternGroupId?: string
   familyId?: FixErrorPatternFamilyId
   lineRoles?: [FixErrorLineRole, FixErrorLineRole, FixErrorLineRole, FixErrorLineRole]
   hintAnchor?: FixErrorHintAnchor
   guideTags?: FixErrorGuideTag[]
 }
 
-type ResolvedFixErrorQuestionSpec = Omit<FixErrorQuestionSpec, 'familyId' | 'lineRoles' | 'hintAnchor' | 'guideTags'> & {
+type ResolvedFixErrorQuestionSpec = Omit<FixErrorQuestionSpec, 'patternGroupId' | 'familyId' | 'lineRoles' | 'hintAnchor' | 'guideTags'> & {
+  patternGroupId: string
   familyId: FixErrorPatternFamilyId
   lineRoles: [FixErrorLineRole, FixErrorLineRole, FixErrorLineRole, FixErrorLineRole]
   hintAnchor: FixErrorHintAnchor
@@ -370,9 +372,15 @@ const inferPatternFamilyId = (language: FixErrorSupportedLanguageId, item: FixEr
 
 const resolveFixErrorSpec = (language: FixErrorSupportedLanguageId, item: FixErrorQuestionSpec): ResolvedFixErrorQuestionSpec => {
   const familyId = item.familyId ?? inferPatternFamilyId(language, item)
+  const errorHead = extractLogHead(item.errorText.en)
+  const culpritSurface = normalizeSurface(item.lines[item.culpritLine - 1] ?? '')
+  const patternGroupId =
+    item.patternGroupId ??
+    `${language}::${familyId}::${normalizeSurface(errorHead || item.errorText.en)}::${culpritSurface}`.slice(0, 240)
 
   return {
     ...item,
+    patternGroupId,
     familyId,
     lineRoles: item.lineRoles ?? buildBaselineLineRoles(item.culpritLine),
     hintAnchor: item.hintAnchor ?? familyHintAnchors[familyId],
@@ -547,14 +555,65 @@ const renderLineLayout = (
 }
 
 const getSupplementalFixErrorSpecs = (language: FixErrorSupportedLanguageId): FixErrorQuestionSpec[] => {
-  void language
-  void specWithMeta
-  void createWrongChoiceExplanation
-  void createFixErrorQuestionHint
-  void createFixErrorVariant
-  void createHardFixErrorSpec
-  void expandFixErrorItems
-  return []
+  switch (language) {
+    case 'python':
+      return buildPythonStyleSupplementalFixErrorSpecs('python', 12)
+    case 'java':
+      return buildJavaStyleSupplementalFixErrorSpecs(10)
+    case 'javascript':
+    case 'jsx':
+    case 'typescript':
+    case 'cloud-functions':
+      return buildJsStyleSupplementalFixErrorSpecs(language, 14)
+    case 'csharp':
+      return buildCsharpStyleSupplementalFixErrorSpecs(language, 12)
+    case 'cpp':
+      return buildCppStyleSupplementalFixErrorSpecs(language, 12)
+    case 'dart':
+      return buildDartStyleSupplementalFixErrorSpecs(12)
+    case 'go':
+      return buildGoStyleSupplementalFixErrorSpecs(12)
+    case 'kotlin':
+      return buildKotlinStyleSupplementalFixErrorSpecs(12)
+    case 'swift':
+      return buildSwiftStyleSupplementalFixErrorSpecs(12)
+    case 'ruby':
+      return buildRubyStyleSupplementalFixErrorSpecs(12)
+    case 'bash':
+      return buildBashStyleSupplementalFixErrorSpecs(11)
+    case 'sql':
+      return buildSqlStyleSupplementalFixErrorSpecs(11)
+    case 'php':
+      return buildPhpStyleSupplementalFixErrorSpecs(12)
+    case 'rust':
+      return buildRustStyleSupplementalFixErrorSpecs('rust', 12)
+    case 'roblox-lua':
+    case 'love2d-lua':
+    case 'defold-lua':
+      return buildLuaStyleSupplementalFixErrorSpecs(language, 12)
+    case 'godot-gdscript':
+      return buildGdscriptStyleSupplementalFixErrorSpecs(12)
+    case 'godot-shader':
+      return buildGodotShaderStyleSupplementalFixErrorSpecs(12)
+    case 'unity-csharp':
+      return buildCsharpStyleSupplementalFixErrorSpecs(language, 12)
+    case 'unity-shaderlab':
+      return buildUnityShaderStyleSupplementalFixErrorSpecs(12)
+    case 'unreal-cpp':
+      return buildCppStyleSupplementalFixErrorSpecs(language, 12)
+    case 'glsl':
+      return buildGlslStyleSupplementalFixErrorSpecs(12)
+    case 'phaser-typescript':
+    case 'rpg-maker-js':
+    case 'cocos-typescript':
+      return buildJsStyleSupplementalFixErrorSpecs(language, 14)
+    case 'gamemaker-gml':
+      return buildGmlStyleSupplementalFixErrorSpecs(12)
+    case 'bevy-rust':
+      return buildRustStyleSupplementalFixErrorSpecs(language, 12)
+    case 'renpy-python':
+      return buildPythonStyleSupplementalFixErrorSpecs(language, 12)
+  }
 }
 
 const createWrongChoiceExplanation = (wrongLine: number, culpritLine: number): LocalizedText =>
@@ -643,6 +702,7 @@ const createQuestion = (
     track: getFixErrorTrack(language),
     language,
     difficulty,
+    patternGroupId: item.patternGroupId,
     familyId: item.familyId,
     lineRoles: item.lineRoles,
     hintAnchor: item.hintAnchor,
@@ -751,6 +811,12 @@ const expandFixErrorItems = (
   return [...items, ...extras]
 }
 
+void createWrongChoiceExplanation
+void createFixErrorQuestionHint
+void createFixErrorVariant
+void createHardFixErrorSpec
+void expandFixErrorItems
+
 const fillPatternSpecsToSize = (
   language: FixErrorSupportedLanguageId,
   items: ResolvedFixErrorQuestionSpec[],
@@ -780,8 +846,52 @@ const fillPatternSpecsToSize = (
   ]
 
   const selected: ResolvedFixErrorQuestionSpec[] = []
-  let cursor = 0
+  const usedPatternGroups = new Set<string>()
+  const familyCursors = new Map<FixErrorPatternFamilyId, number>()
 
+  while (selected.length < targetSize && usedPatternGroups.size < uniqueItems.length) {
+    let addedFreshItem = false
+
+    for (const familyId of orderedFamilies) {
+      const familyItems = grouped.get(familyId)
+      if (!familyItems || familyItems.length === 0) {
+        continue
+      }
+
+      const startCursor = familyCursors.get(familyId) ?? 0
+      let pickedItem: ResolvedFixErrorQuestionSpec | undefined
+
+      for (let offset = 0; offset < familyItems.length; offset += 1) {
+        const candidateIndex = (startCursor + offset) % familyItems.length
+        const candidate = familyItems[candidateIndex]
+        if (usedPatternGroups.has(candidate.patternGroupId)) {
+          continue
+        }
+
+        pickedItem = candidate
+        familyCursors.set(familyId, (candidateIndex + 1) % familyItems.length)
+        break
+      }
+
+      if (!pickedItem) {
+        continue
+      }
+
+      selected.push(pickedItem)
+      usedPatternGroups.add(pickedItem.patternGroupId)
+      addedFreshItem = true
+
+      if (selected.length >= targetSize) {
+        return selected
+      }
+    }
+
+    if (!addedFreshItem) {
+      break
+    }
+  }
+
+  let cursor = 0
   while (selected.length < targetSize) {
     const familyId = orderedFamilies[cursor % orderedFamilies.length] ?? orderedFamilies[0]
     const familyItems = grouped.get(familyId)
@@ -2668,6 +2778,306 @@ const createRenpyPythonGameBank = (language: FixErrorSupportedLanguageId) =>
     FIX_ERROR_GAME_BANK_SIZE,
   )
 
+const createSupplementalFixErrorSpec = (
+  errorText: LocalizedText | string,
+  lines: [string, string, string, string],
+  culpritLine: LineNumber,
+  hint: LocalizedText,
+  explanation: LocalizedText,
+  familyId: FixErrorPatternFamilyId,
+  hintAnchor: FixErrorHintAnchor = familyHintAnchors[familyId],
+) =>
+  specWithMeta(errorText, lines, culpritLine, hint, explanation, {
+    familyId,
+    hintAnchor,
+    guideTags: familyGuideTags[familyId],
+  })
+
+const takeSupplementalFixErrorSpecs = (items: FixErrorQuestionSpec[], count: number) => items.slice(0, count)
+
+function buildPythonStyleSupplementalFixErrorSpecs(language: FixErrorSupportedLanguageId, count: number) {
+  const selectorLookup = language === 'renpy-python' ? 'label_box = renpy.get_screen("say_scren")' : 'title = screen.select_one("#score-panl")'
+
+  return takeSupplementalFixErrorSpecs(
+    [
+      createSupplementalFixErrorSpec(
+        "ModuleNotFoundError: No module named 'battle_servce'",
+        ['from battle_servce import load_enemy', 'enemy = load_enemy()', 'print(enemy)', 'return enemy'],
+        1,
+        bi('เช็กชื่อโมดูลใน import ให้ตรงกับไฟล์จริงก่อน', 'Verify the imported module name matches the real file.'),
+        bi('บรรทัดนี้ import โมดูลผิดชื่อ จึงทำให้ flow ล้มตั้งแต่ต้นทาง', 'This line imports the wrong module name, so the flow breaks at the source.'),
+        'module-import',
+      ),
+      createSupplementalFixErrorSpec(
+        "KeyError: 'manna'",
+        ['player = {"stats": {"mana": 8}}', 'current = player["stats"]["manna"]', 'print(current)', 'return current'],
+        2,
+        bi('เทียบ key ใน dict กับ key ที่ถูกอ่านว่าตรงกันจริงหรือไม่', 'Compare the dict key with the key being accessed.'),
+        bi('บรรทัดนี้อ่าน key ที่ไม่มีอยู่จริงในข้อมูล', 'This line reads a key that does not exist in the data shape.'),
+        'field-property',
+      ),
+      createSupplementalFixErrorSpec(
+        "TypeError: build_card() takes 2 positional arguments but 3 were given",
+        ['def build_card(name, title):', '    return f"{name}-{title}"', 'card = build_card("Ada", "Mage", "A+")', 'print(card)'],
+        3,
+        bi('นับจำนวน argument ที่ส่งเข้าฟังก์ชันกับที่ประกาศไว้', 'Count the arguments passed against the declared signature.'),
+        bi('บรรทัดนี้ส่ง argument เกินจากที่ฟังก์ชันรับจริง', 'This line passes more arguments than the function actually accepts.'),
+        'arity',
+      ),
+      createSupplementalFixErrorSpec(
+        "TypeError: unsupported operand type(s) for +: 'int' and 'str'",
+        ['bonus = 4', 'next_bonus = bonus + "1"', 'print(next_bonus)', 'return next_bonus'],
+        2,
+        bi('ดูชนิดข้อมูลของค่าที่ถูกนำมาคำนวณร่วมกัน', 'Inspect the types being combined in the arithmetic step.'),
+        bi('บรรทัดนี้ผสม int กับ str ในการบวก จึงเป็น type mismatch', 'This line mixes an int with a str during addition, causing a type mismatch.'),
+        'type-mismatch',
+      ),
+      createSupplementalFixErrorSpec(
+        'IndexError: list index out of range',
+        ['panels = ["home", "shop"]', 'active = panels[4]', 'print(active)', 'return active'],
+        2,
+        bi('เช็กเลข index เทียบกับจำนวนสมาชิกจริงของลิสต์', 'Check the index against the real list length.'),
+        bi('บรรทัดนี้เข้าถึงตำแหน่งที่ไม่มีในลิสต์', 'This line accesses a list slot that does not exist.'),
+        'range',
+      ),
+      createSupplementalFixErrorSpec(
+        "AttributeError: 'NoneType' object has no attribute 'strip'",
+        ['session = None', 'token = session.strip()', 'print(token)', 'return token'],
+        2,
+        bi('ย้อนดูว่าค่าที่ถูกเรียก method ยังเป็น None อยู่หรือไม่', 'Trace whether the value is still None before the method call.'),
+        bi('บรรทัดนี้เรียก method จากค่า None โดยตรง', 'This line calls a method directly on None.'),
+        'null-access',
+      ),
+      createSupplementalFixErrorSpec(
+        "AttributeError: 'dict' object has no attribute 'updte'",
+        ['profile = {"id": 4}', 'profile.updte({"name": "Ada"})', 'print(profile)', 'return profile'],
+        2,
+        bi('อ่านชื่อ method ให้ครบทุกตัวอักษรก่อนตอบ', 'Read the method name character by character before answering.'),
+        bi('บรรทัดนี้สะกดชื่อ method ผิด จึงเรียกของจริงไม่เจอ', 'This line misspells the method name, so the real API is never reached.'),
+        'method-typo',
+      ),
+      createSupplementalFixErrorSpec(
+        "AttributeError: 'NoneType' object has no attribute 'text'",
+        ['from bs4 import BeautifulSoup', selectorLookup, 'print(title.text)', 'return title'],
+        2,
+        bi('เริ่มจากตัวค้นหา target ที่ได้ค่า None ก่อนจะไปดูบรรทัดใช้งาน', 'Start with the target lookup that returned None before checking the usage line.'),
+        bi('บรรทัดนี้ชี้ไปที่ target ที่หาไม่เจอ จึงล้มต่อเนื่องทีหลัง', 'This line points at a target that is not found, creating the later symptom.'),
+        'selector-mismatch',
+        'symptom-vs-root',
+      ),
+      createSupplementalFixErrorSpec(
+        'SyntaxError: expected ":" after condition',
+        ['if score > 10', '    print("bonus")', 'print("done")', 'return'],
+        1,
+        bi('เช็กโครงสร้างบรรทัดเงื่อนไขว่าขาดเครื่องหมายปิดหรือไม่', 'Check whether the condition line is missing its required delimiter.'),
+        bi('บรรทัดนี้เปิดเงื่อนไขไม่ครบรูปแบบ จึงเป็น syntax root cause', 'This line leaves the condition structure incomplete, making it the syntax root cause.'),
+        'syntax',
+      ),
+      createSupplementalFixErrorSpec(
+        "NameError: name 'currnt_user' is not defined",
+        ['current_user = "Ada"', 'print(currnt_user)', 'print("done")', 'return'],
+        2,
+        bi('เทียบชื่อตัวแปรที่ใช้งานกับตัวที่ประกาศไว้จริง', 'Compare the used variable name against the declared one.'),
+        bi('บรรทัดนี้ใช้ชื่อตัวแปรที่สะกดผิดจากของจริง', 'This line uses a misspelled variable name.'),
+        'name-typo',
+      ),
+      createSupplementalFixErrorSpec(
+        "KeyError: 'API_KEYY'",
+        ['api_key = os.environ["API_KEYY"]', 'client = build_client(api_key)', 'print(client)', 'return client'],
+        1,
+        bi('เริ่มจากชื่อ env key ที่ถูกอ่านก่อน เพราะอาการปลายทางจะหลอกตาได้ง่าย', 'Start from the env key being read because the downstream symptom can be misleading.'),
+        bi('บรรทัดนี้อ่าน config key ผิดชื่อ ทำให้ค่าทั้ง flow หายไปตั้งแต่ต้น', 'This line reads the wrong config key name, so the value is missing from the start of the flow.'),
+        'field-property',
+        'symptom-vs-root',
+      ),
+      createSupplementalFixErrorSpec(
+        "AttributeError: 'NoneType' object has no attribute 'get'",
+        ['button = soup.select_one("[data-role=\'cta-buttun\']")', 'label = button.get("data-id")', 'print(label)', 'return label'],
+        1,
+        bi('เริ่มจาก selector ที่หา target ไม่เจอก่อนเสมอ', 'Always start from the selector that failed to find the target.'),
+        bi('บรรทัดนี้หา target ไม่เจอ จึงทำให้บรรทัดใช้งานล้มตามมา', 'This line fails to find the target, so the usage line collapses afterward.'),
+        'selector-mismatch',
+        'symptom-vs-root',
+      ),
+    ],
+    count,
+  )
+}
+
+function buildJsStyleSupplementalFixErrorSpecs(language: FixErrorSupportedLanguageId, count: number) {
+  const selectorLine =
+    language === 'phaser-typescript'
+      ? 'const hud = this.children.getByName("score-panl")'
+      : language === 'rpg-maker-js'
+        ? 'const hud = SceneManager._scene.findChildByName("score-panl")'
+        : language === 'cocos-typescript'
+          ? 'const hud = this.node.getChildByName("score-panl")'
+          : 'const hud = document.querySelector("#score-panl")'
+
+  return takeSupplementalFixErrorSpecs(
+    [
+      createSupplementalFixErrorSpec("Cannot find module './hud-servce'", ['import { loadHud } from "./hud-servce"', 'const hud = loadHud()', 'console.log(hud)', 'return hud'], 1, bi('เริ่มจาก path ใน import ก่อน เพราะถ้าผิดทั้ง flow จะไม่ขึ้น', 'Start with the module path in the import because a wrong path blocks the whole flow.'), bi('บรรทัดนี้ import path ผิด จึงทำให้โมดูลโหลดไม่ขึ้นตั้งแต่ต้นทาง', 'This line uses the wrong import path, so the module never loads.'), 'module-import'),
+      createSupplementalFixErrorSpec('TypeError: Cannot read properties of undefined (reading "manna")', ['const player = { stats: { mana: 8 } }', 'const mana = player.stats.manna.value', 'console.log(mana)', 'return mana'], 2, bi('ดู path ของ property ทั้งเส้นว่า field ไหนชื่อไม่ตรงกับข้อมูลจริง', 'Inspect the full property path to find the field name that does not match the real data.'), bi('บรรทัดนี้อ่าน field ผิดชื่อ ทำให้ค่ากลายเป็น undefined ก่อนระเบิดทีหลัง', 'This line reads the wrong field name, turning the value into undefined before the later symptom appears.'), 'field-property', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec('TypeError: spawnEnemy expects 2 arguments but received 3', ['const spawnEnemy = (kind, lane) => `${kind}-${lane}`', 'const ticket = spawnEnemy("bat", 2, "left")', 'console.log(ticket)', 'return ticket'], 2, bi('นับจำนวน argument ที่ส่งเข้าไปกับ signature ของฟังก์ชัน', 'Count the passed arguments against the function signature.'), bi('บรรทัดนี้ส่ง argument เกินจากที่ฟังก์ชันรองรับ', 'This line passes more arguments than the function supports.'), 'arity'),
+      createSupplementalFixErrorSpec('TypeError: points.toUpperCase is not a function', ['const points = 42', 'const badge = points.toUpperCase()', 'console.log(badge)', 'return badge'], 2, bi('ถามก่อนว่าค่าตัวนั้นเป็นชนิดข้อมูลที่มี method นี้จริงหรือไม่', 'Ask first whether that value is actually a type that owns this method.'), bi('บรรทัดนี้ใช้ method ของ string กับ number จึงเป็น type mismatch', 'This line uses a string method on a number, causing a type mismatch.'), 'type-mismatch'),
+      createSupplementalFixErrorSpec('TypeError: Cannot read properties of undefined (reading "name")', ['const queue = [{ name: "A" }, { name: "B" }]', 'console.log(queue[4].name)', 'console.log("done")', 'return'], 2, bi('เช็ก index ที่อ่านกับจำนวนสมาชิกจริงใน array', 'Check the accessed index against the real array length.'), bi('บรรทัดนี้เข้าถึง index ที่ไม่มีอยู่ใน array', 'This line accesses an array index that does not exist.'), 'range'),
+      createSupplementalFixErrorSpec('TypeError: Cannot read properties of null (reading "trim")', ['const token = null', 'console.log(token.trim())', 'console.log("done")', 'return'], 2, bi('อย่าตอบจากอาการปลายทาง ให้ย้อนดูว่าค่าต้นทางยังเป็น null อยู่หรือไม่', 'Do not answer from the symptom alone; trace whether the source value is still null.'), bi('บรรทัดนี้เรียก method จากค่า null โดยตรง', 'This line calls a method directly on null.'), 'null-access'),
+      createSupplementalFixErrorSpec('TypeError: cache.claer is not a function', ['const cache = new Map()', 'cache.claer()', 'console.log("done")', 'return'], 2, bi('เช็กชื่อ method ให้ครบทุกตัวอักษร เพราะบรรทัดข้าง ๆ ถูกวางมาให้ดูน่าสงสัยเหมือนกัน', 'Check the method name character by character because nearby lines were made to look suspicious too.'), bi('บรรทัดนี้สะกดชื่อ method ผิด จึงเรียก API จริงไม่เจอ', 'This line misspells the method name, so the real API is never reached.'), 'method-typo'),
+      createSupplementalFixErrorSpec('TypeError: Cannot read properties of null (reading "classList")', [selectorLine, 'hud.classList.add("ready")', 'console.log("done")', 'return'], 1, bi('เริ่มจากบรรทัดหา target ก่อน ไม่ใช่บรรทัดที่อาการระเบิดออกมา', 'Start from the lookup line, not the line where the symptom explodes.'), bi('บรรทัดนี้หา target ไม่เจอ ทำให้บรรทัดถัดไปล้มตามมา', 'This line fails to locate the target, which causes the next line to collapse.'), 'selector-mismatch', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec("SyntaxError: Unexpected token '}'", ['if (isReady {', '  console.log("go")', '}', 'return'], 1, bi('เช็กวงเล็บและโครงสร้างเปิดปิดของเงื่อนไขก่อนดูบรรทัดอาการ', 'Check the opening and closing condition structure before looking at the symptom line.'), bi('บรรทัดนี้เปิดเงื่อนไขไม่ครบรูปแบบ จึงทำให้ parser หลุดทั้ง flow', 'This line opens the condition in an incomplete shape, which breaks the parser.'), 'syntax'),
+      createSupplementalFixErrorSpec("ReferenceError: currntUser is not defined", ['const currentUser = "Ada"', 'console.log(currntUser)', 'console.log("done")', 'return'], 2, bi('เทียบชื่อตัวแปรที่ใช้งานกับตัวที่ประกาศไว้ให้ครบทุกตัวอักษร', 'Compare the used variable name against the declared one character by character.'), bi('บรรทัดนี้อ้างตัวแปรผิดชื่อจากที่ประกาศไว้จริง', 'This line references the wrong variable name.'), 'name-typo'),
+      createSupplementalFixErrorSpec('Error: API_KEY is missing after config bootstrap', ['const apiKey = process.env.API_KEYY', 'const client = createClient(apiKey)', 'console.log(client)', 'return client'], 1, bi('เริ่มจากบรรทัดอ่าน config key ก่อน เพราะ error ปลายทางจะพาไปดูการเชื่อมต่อแทน', 'Start from the config-read line because the downstream error tries to pull you toward connection fallout.'), bi('บรรทัดนี้อ่าน config key ผิดชื่อ ทำให้ค่าที่ส่งต่อไปหายตั้งแต่ต้น', 'This line reads the wrong config key name, so the downstream value is missing from the start.'), 'field-property', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec('TypeError: Cannot read properties of null (reading "dataset")', ['const chip = document.querySelector("[data-role=\'cta-buttun\']")', 'console.log(chip.dataset.id)', 'console.log("done")', 'return'], 1, bi('เริ่มจาก selector ก่อนเสมอ อย่าหลงไปตอบบรรทัดอาการปลายทาง', 'Always start from the selector line instead of answering from the downstream symptom.'), bi('บรรทัดนี้หา element ผิด target จึงทำให้บรรทัดใช้งานล้มตามมา', 'This line targets the wrong element lookup, causing the later usage line to fail.'), 'selector-mismatch', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec("Cannot find module '@/cards/card-normlizer'", ['import { normalizeCard } from "@/cards/card-normlizer"', 'const card = normalizeCard(payload)', 'console.log(card)', 'return card'], 1, bi('เริ่มจาก path ของโมดูลก่อน เพราะอาการปลายทางจะไม่ช่วยถ้าไฟล์โหลดไม่ขึ้น', 'Start from the module path because downstream symptoms are useless if the file never loads.'), bi('บรรทัดนี้ import path ผิด ทำให้โมดูลไม่ถูกโหลดตั้งแต่ต้นทาง', 'This line uses the wrong import path, so the module never loads from the start.'), 'module-import'),
+      createSupplementalFixErrorSpec('TypeError: service.refrseh is not a function', ['const service = createService()', 'service.refrseh()', 'console.log("done")', 'return'], 2, bi('เช็กชื่อ method อีกครั้ง บรรทัดนี้ตั้งใจให้ดูคล้ายของจริงมากเป็นพิเศษ', 'Check the method name again. This line was designed to look especially close to the real API.'), bi('บรรทัดนี้สะกดชื่อ method ผิดจากของจริง', 'This line misspells the real method name.'), 'method-typo'),
+    ],
+    count,
+  )
+}
+
+function buildTypedStyleSupplementalFixErrorSpecs(count: number) {
+  return takeSupplementalFixErrorSpecs(
+    [
+      createSupplementalFixErrorSpec("Module import error: cannot find 'HudServce'", ['import HudServce;', 'var hud = HudServce.load();', 'print(hud);', 'return;'], 1, bi('เช็กชื่อไฟล์หรือ namespace ใน import/include ให้ตรงก่อน', 'Check the import/include name first.'), bi('บรรทัดนี้อ้าง import ผิดชื่อ จึงล้มตั้งแต่จุดเริ่มต้นของ flow', 'This line references the wrong import name, so the flow breaks at the start.'), 'module-import'),
+      createSupplementalFixErrorSpec("Property error: field 'manna' does not exist", ['var player = { stats: { mana: 8 } };', 'var mana = player.stats.manna;', 'print(mana);', 'return;'], 2, bi('เทียบชื่อ field กับโครงข้อมูลจริง อย่าตอบจากบรรทัดอาการอย่างเดียว', 'Compare the field name with the real data shape instead of answering from the symptom line alone.'), bi('บรรทัดนี้อ่าน field ผิดชื่อ ทำให้ค่าที่ไหลต่อไปเสียตั้งแต่ตรงนี้', 'This line reads the wrong field name, corrupting the value from this point onward.'), 'field-property', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec('Argument error: expected 2 arguments but received 3', ['var ticket = buildCard(name, title);', 'var badge = buildCard("Ada", "Mage", "A+");', 'print(badge);', 'return;'], 2, bi('นับ argument ที่ส่งเข้ากับจำนวนที่ฟังก์ชันรับจริง', 'Count the passed arguments against the real function signature.'), bi('บรรทัดนี้ส่ง argument เกินจาก signature ที่รองรับ', 'This line passes more arguments than the signature accepts.'), 'arity'),
+      createSupplementalFixErrorSpec('Type mismatch: cannot add number and string', ['var score = 4;', 'var total = score + "1";', 'print(total);', 'return;'], 2, bi('ดูชนิดข้อมูลของค่าทั้งสองฝั่งก่อนตัดสินจาก error ปลายทาง', 'Inspect the types on both sides before judging from the downstream error.'), bi('บรรทัดนี้ผสม number กับ string ในการคำนวณ จึงเป็น type mismatch', 'This line mixes a number with a string during arithmetic, causing a type mismatch.'), 'type-mismatch'),
+      createSupplementalFixErrorSpec('Index error: item 4 is outside the collection bounds', ['var items = [1, 2];', 'print(items[4]);', 'print("done");', 'return;'], 2, bi('เช็ก index เทียบกับขนาด collection ที่มีจริง', 'Check the index against the real collection size.'), bi('บรรทัดนี้เข้าถึง index ที่ไม่มีใน collection', 'This line accesses an index that does not exist in the collection.'), 'range'),
+      createSupplementalFixErrorSpec('Null reference: token is null', ['var token = null;', 'print(token.trim());', 'print("done");', 'return;'], 2, bi('ย้อนดูว่าค่าต้นทางยังเป็น null อยู่หรือไม่ก่อนเรียก method', 'Trace whether the source value is still null before the method call.'), bi('บรรทัดนี้เรียก method จากค่า null โดยตรง', 'This line calls a method directly on null.'), 'null-access'),
+      createSupplementalFixErrorSpec("Method error: 'claer' does not exist", ['var cache = new Cache();', 'cache.claer();', 'print("done");', 'return;'], 2, bi('เช็กชื่อ method ให้ครบทุกตัวอักษร อย่าหลงกับบรรทัดประกอบฉาก', 'Check the method name character by character instead of chasing the staging lines.'), bi('บรรทัดนี้สะกดชื่อ method ผิดจากของจริง', 'This line misspells the method name.'), 'method-typo'),
+      createSupplementalFixErrorSpec('Target lookup failed: node path hud/startt not found', ['var button = findNode("hud/startt");', 'button.show();', 'print("done");', 'return;'], 1, bi('เริ่มจากบรรทัดหา target ก่อน บรรทัดถัดไปเป็นแค่อาการปลายทาง', 'Start with the target lookup line first; the next line is only the symptom.'), bi('บรรทัดนี้หา target ผิด path จึงทำให้บรรทัดใช้งานล้มตามมา', 'This line uses the wrong target path, so the usage line collapses afterward.'), 'selector-mismatch', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec('Syntax error: expected closing ")"', ['if (isReady {', '  print("go");', '}', 'return;'], 1, bi('เช็กโครงสร้างเปิดปิดของเงื่อนไขก่อนดูอาการบรรทัดล่าง', 'Check the opening and closing condition structure before reading the lower symptom.'), bi('บรรทัดนี้เปิดเงื่อนไขไม่ครบ จึงเป็น syntax root cause ของทั้ง flow', 'This line opens the condition incorrectly, making it the syntax root cause of the whole flow.'), 'syntax'),
+      createSupplementalFixErrorSpec("Name error: 'currntUser' is undefined", ['var currentUser = "Ada";', 'print(currntUser);', 'print("done");', 'return;'], 2, bi('เทียบชื่อ identifier ที่ประกาศไว้กับที่ถูกใช้งานจริง', 'Compare the declared identifier with the one actually used.'), bi('บรรทัดนี้อ้าง identifier ผิดชื่อจากของจริง', 'This line references the wrong identifier name.'), 'name-typo'),
+      createSupplementalFixErrorSpec('Config error: key API_KEYY was not found', ['var apiKey = ENV.API_KEYY;', 'var client = buildClient(apiKey);', 'print(client);', 'return;'], 1, bi('เริ่มจากบรรทัดอ่าน config key ก่อน เพราะอาการปลายทางจะดูเหมือนปัญหา connection', 'Start from the config-read line because the downstream symptom will look like a connection issue.'), bi('บรรทัดนี้อ่าน config key ผิดชื่อ ทำให้ค่าที่ส่งต่อหายตั้งแต่ต้นทาง', 'This line reads the wrong config key name, so the value is missing from the start of the flow.'), 'field-property', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec('Target lookup failed for hud/cta-buttun', ['var chip = findNode("hud/cta-buttun");', 'chip.show();', 'print("done");', 'return;'], 1, bi('แยกบรรทัดหา target ออกจากบรรทัดที่อาการระเบิดทีหลัง', 'Separate the target lookup line from the later symptom line.'), bi('บรรทัดนี้หา target ผิด path จึงทำให้บรรทัดใช้งานล้มตามมา', 'This line looks up the wrong target path, so the later usage line fails.'), 'selector-mismatch', 'symptom-vs-root'),
+    ],
+    count,
+  )
+}
+
+function buildCsharpStyleSupplementalFixErrorSpecs(_language: FixErrorSupportedLanguageId, count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildCppStyleSupplementalFixErrorSpecs(_language: FixErrorSupportedLanguageId, count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildJavaStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildDartStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildGoStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildKotlinStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildSwiftStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildPhpStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildRustStyleSupplementalFixErrorSpecs(_language: FixErrorSupportedLanguageId, count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildLuaStyleSupplementalFixErrorSpecs(language: FixErrorSupportedLanguageId, count: number) {
+  const targetLookup =
+    language === 'roblox-lua'
+      ? 'local hud = script.Parent:FindFirstChild("ScorePanl")'
+      : language === 'defold-lua'
+        ? 'local hud = go.get("#score_panl", "text")'
+        : 'local hud = ui:find("score_panl")'
+
+  return takeSupplementalFixErrorSpecs(
+    [
+      createSupplementalFixErrorSpec("module 'combat_servce' not found", ['local Combat = require("combat_servce")', 'local state = Combat.load()', 'print(state)', 'return state'], 1, bi('เริ่มจากชื่อโมดูลใน require ให้ตรงกับไฟล์จริงก่อน', 'Start with the module name in require and compare it with the real file.'), bi('บรรทัดนี้ require โมดูลผิดชื่อ จึงล้มตั้งแต่ต้นทาง', 'This line requires the wrong module name, so the failure starts here.'), 'module-import'),
+      createSupplementalFixErrorSpec('attempt to index field \'manna\' (a nil value)', ['local player = { stats = { mana = 8 } }', 'local mana = player.stats.manna.current', 'print(mana)', 'return mana'], 2, bi('ดู path ของ field ทั้งเส้นว่า key ไหนไม่ตรงกับข้อมูลจริง', 'Inspect the full field path to see which key does not match the real data.'), bi('บรรทัดนี้อ่าน field ผิดชื่อ ทำให้ค่าปลายทางกลายเป็น nil', 'This line reads the wrong field name, turning the downstream value into nil.'), 'field-property', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec('bad argument #3 to \'spawn_enemy\' (number expected, got string)', ['local ticket = spawn_enemy("bat", 2)', 'local nextTicket = spawn_enemy("bat", 2, "left")', 'print(nextTicket)', 'return nextTicket'], 2, bi('นับจำนวนและชนิดของ argument ที่ส่งเข้าไปกับ signature จริง', 'Count the number and types of arguments against the real signature.'), bi('บรรทัดนี้ส่ง argument เกินและผิดชนิดจากที่ฟังก์ชันคาดไว้', 'This line passes an extra argument with the wrong type for the function.'), 'arity'),
+      createSupplementalFixErrorSpec('attempt to perform arithmetic on a string value', ['local speed = 4', 'local boost = speed + "1"', 'print(boost)', 'return boost'], 2, bi('เช็กชนิดข้อมูลของค่าที่ถูกนำมาคำนวณร่วมกัน', 'Check the value types being combined in arithmetic.'), bi('บรรทัดนี้ผสม number กับ string ในการคำนวณ', 'This line mixes a number with a string during arithmetic.'), 'type-mismatch'),
+      createSupplementalFixErrorSpec('attempt to index a nil value', ['local slots = { "a", "b" }', 'print(slots[5])', 'print("done")', 'return'], 2, bi('เช็กเลข index เทียบกับจำนวนสมาชิกจริงของตาราง', 'Check the index against the real table size.'), bi('บรรทัดนี้เข้าถึงตำแหน่งที่ไม่มีอยู่ในตาราง', 'This line accesses a table slot that does not exist.'), 'range'),
+      createSupplementalFixErrorSpec("attempt to call method 'trim' (a nil value)", ['local token = nil', 'print(token:trim())', 'print("done")', 'return'], 2, bi('ย้อนดูว่าค่าต้นทางยังเป็น nil อยู่หรือไม่ก่อนเรียก method', 'Trace whether the source value is still nil before the method call.'), bi('บรรทัดนี้เรียก method จากค่า nil โดยตรง', 'This line calls a method directly on nil.'), 'null-access'),
+      createSupplementalFixErrorSpec("attempt to call method 'claer' (a nil value)", ['local cache = Cache.new()', 'cache:claer()', 'print("done")', 'return'], 2, bi('เช็กชื่อ method ให้ครบทุกตัวอักษร อย่าให้บรรทัดข้างเคียงพาไขว้เขว', 'Check the method name character by character and ignore the staging lines.'), bi('บรรทัดนี้สะกดชื่อ method ผิด จึงเรียกของจริงไม่เจอ', 'This line misspells the method name, so the real method is never reached.'), 'method-typo'),
+      createSupplementalFixErrorSpec('target lookup failed: score_panl not found', [targetLookup, 'hud.visible = true', 'print("done")', 'return'], 1, bi('เริ่มจากบรรทัดหา target ก่อน บรรทัดถัดไปเป็นอาการปลายทางเท่านั้น', 'Start from the target lookup line; the next line is only the symptom.'), bi('บรรทัดนี้หา target ไม่เจอ จึงทำให้การใช้งานถัดไปล้มตามมา', 'This line fails to find the target, causing the later usage line to collapse.'), 'selector-mismatch', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec("expected 'then' near 'print'", ['if score > 10', 'print("bonus")', 'print("done")', 'return'], 1, bi('เช็กโครงสร้าง if ว่าขาด then หรือไม่ก่อนตามอาการบรรทัดล่าง', 'Check whether the if structure is missing then before chasing the lower symptom.'), bi('บรรทัดนี้เปิดเงื่อนไขไม่ครบรูปแบบ จึงเป็น syntax root cause', 'This line leaves the condition structure incomplete, making it the syntax root cause.'), 'syntax'),
+      createSupplementalFixErrorSpec("attempt to call global 'currnt_user' (a nil value)", ['local current_user = "Ada"', 'print(currnt_user)', 'print("done")', 'return'], 2, bi('เทียบชื่อ identifier ที่ประกาศไว้กับที่ถูกใช้จริง', 'Compare the declared identifier with the one actually used.'), bi('บรรทัดนี้อ้าง identifier ผิดชื่อจากของจริง', 'This line references the wrong identifier name.'), 'name-typo'),
+    ],
+    count,
+  )
+}
+
+function buildGdscriptStyleSupplementalFixErrorSpecs(count: number) {
+  return buildLuaStyleSupplementalFixErrorSpecs('godot-gdscript', count)
+}
+
+function buildGodotShaderStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildUnityShaderStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildGlslStyleSupplementalFixErrorSpecs(count: number) {
+  return buildTypedStyleSupplementalFixErrorSpecs(count)
+}
+
+function buildGmlStyleSupplementalFixErrorSpecs(count: number) {
+  return buildLuaStyleSupplementalFixErrorSpecs('gamemaker-gml', count)
+}
+
+function buildRubyStyleSupplementalFixErrorSpecs(count: number) {
+  return buildPythonStyleSupplementalFixErrorSpecs('python', count)
+}
+
+function buildBashStyleSupplementalFixErrorSpecs(count: number) {
+  return takeSupplementalFixErrorSpecs(
+    [
+      createSupplementalFixErrorSpec('line 1: source: config/prod.envv: No such file or directory', ['source config/prod.envv', 'echo "$API_KEY"', 'echo "done"', 'return 0'], 1, bi('เช็ก path ของไฟล์ที่ source ก่อน', 'Check the sourced file path first.'), bi('บรรทัดนี้ source ไฟล์ผิด path จึงล้มตั้งแต่ต้นทาง', 'This line sources the wrong file path, so the failure starts here.'), 'module-import'),
+      createSupplementalFixErrorSpec('line 2: CFG_HOSTT: unbound variable', ['CFG_HOST=prod', 'echo "$CFG_HOSTT"', 'echo "done"', 'return 0'], 2, bi('เทียบชื่อตัวแปรที่ใช้งานกับตัวที่ประกาศไว้จริง', 'Compare the used variable name with the declared one.'), bi('บรรทัดนี้อ้างตัวแปรผิดชื่อจากของจริง', 'This line references the wrong variable name.'), 'name-typo'),
+      createSupplementalFixErrorSpec('line 2: [: missing `]\'', ['if [ "$MODE" = "prod" ', 'then echo "go"', 'fi', 'echo "done"'], 1, bi('เช็กโครงสร้าง if/test ว่าปิดครบหรือไม่', 'Check whether the if/test structure is properly closed.'), bi('บรรทัดนี้ปิดเงื่อนไขไม่ครบ จึงเป็น syntax root cause', 'This line leaves the condition structure incomplete, making it the syntax root cause.'), 'syntax'),
+      createSupplementalFixErrorSpec('line 2: arithmetic expression: non-numeric argument', ['score=4', 'echo $((score + "1"))', 'echo "done"', 'return 0'], 2, bi('ดูชนิดข้อมูลที่นำมาคำนวณว่าเป็นตัวเลขจริงหรือไม่', 'Check whether the values used in arithmetic are truly numeric.'), bi('บรรทัดนี้นำ string มารวมกับตัวเลขในการคำนวณ', 'This line mixes a string into numeric arithmetic.'), 'type-mismatch'),
+      createSupplementalFixErrorSpec('line 2: save_report: too many arguments', ['save_report() { echo "$1"; }', 'save_report "$USER" "$MODE"', 'echo "done"', 'return 0'], 2, bi('นับจำนวน argument ที่ฟังก์ชันรับกับที่ส่งจริง', 'Count the function arguments against the real call shape.'), bi('บรรทัดนี้ส่ง argument เกินจากที่ฟังก์ชัน shell รองรับไว้', 'This line passes more arguments than the shell helper was designed to take.'), 'arity'),
+      createSupplementalFixErrorSpec('line 2: token: parameter null or not set', ['token=', 'printf "%s\\n" "${token:?}"', 'echo "done"', 'return 0'], 2, bi('ย้อนดูว่าค่าต้นทางยังว่างหรือไม่ก่อนถูกบังคับใช้งาน', 'Trace whether the source value is still empty before it is forced into use.'), bi('บรรทัดนี้บังคับใช้งานค่าที่ว่างอยู่ จึงล้มทันที', 'This line forces the use of an empty value and fails immediately.'), 'null-access'),
+      createSupplementalFixErrorSpec('line 2: flags[4]: bad array subscript', ['flags=("a" "b")', 'echo "${flags[4]}"', 'echo "done"', 'return 0'], 2, bi('เช็ก index ของ array เทียบกับจำนวนสมาชิกจริง', 'Check the array index against the real number of elements.'), bi('บรรทัดนี้เข้าถึง index ที่ไม่มีใน array', 'This line accesses an index that does not exist in the array.'), 'range'),
+      createSupplementalFixErrorSpec('line 2: cfg[hostt]: bad substitution', ['declare -A cfg=([host]=prod)', 'echo "${cfg[hostt]}"', 'echo "done"', 'return 0'], 2, bi('เทียบชื่อ key ใน associative array กับของจริง', 'Compare the associative-array key name with the real one.'), bi('บรรทัดนี้อ่าน key ผิดชื่อจาก associative array', 'This line reads the wrong key from the associative array.'), 'field-property'),
+      createSupplementalFixErrorSpec('line 1: ./scripts/boot-sequnce.sh: No such file or directory', ['./scripts/boot-sequnce.sh', 'echo "boot"', 'echo "done"', 'return 0'], 1, bi('เริ่มจาก path ของสคริปต์ที่ถูกเรียกก่อน', 'Start with the script path being called.'), bi('บรรทัดนี้เรียกสคริปต์ผิด path จึงล้มตั้งแต่ต้นทาง', 'This line calls the wrong script path, so the flow fails at the start.'), 'module-import'),
+      createSupplementalFixErrorSpec('line 2: printff: command not found', ['message="ready"', 'printff "%s\\n" "$message"', 'echo "done"', 'return 0'], 2, bi('เช็กชื่อคำสั่งให้ครบทุกตัวอักษรก่อน', 'Check the command name character by character first.'), bi('บรรทัดนี้เรียกคำสั่งผิดชื่อจาก printf', 'This line misspells the command name from printf.'), 'method-typo'),
+      createSupplementalFixErrorSpec('line 2: arr[9]: bad array subscript', ['arr=("x" "y")', 'printf "%s\\n" "${arr[9]}"', 'echo "done"', 'return 0'], 2, bi('เช็ก index ของ array ให้ตรงกับจำนวนสมาชิกจริง', 'Check the array index against the actual number of members.'), bi('บรรทัดนี้เข้าถึง index ที่ไม่มีใน array', 'This line accesses an array index that does not exist.'), 'range'),
+    ],
+    count,
+  )
+}
+
+function buildSqlStyleSupplementalFixErrorSpecs(count: number) {
+  return takeSupplementalFixErrorSpecs(
+    [
+      createSupplementalFixErrorSpec('ERROR: relation "user_scorez" does not exist', ['SELECT *', 'FROM user_scorez', 'WHERE user_id = 7;', ''], 2, bi('เริ่มจากชื่อ table/view ที่อ้างถึงก่อน', 'Start with the referenced table/view name first.'), bi('บรรทัดนี้อ้าง relation ผิดชื่อจากของจริง', 'This line references the wrong relation name.'), 'module-import'),
+      createSupplementalFixErrorSpec('ERROR: column "manna" does not exist', ['SELECT stats.manna', 'FROM player_stats AS stats', 'WHERE stats.user_id = 7;', ''], 1, bi('เทียบชื่อ column กับ schema จริงก่อน', 'Compare the column name with the real schema first.'), bi('บรรทัดนี้อ้าง column ผิดชื่อจาก schema จริง', 'This line references the wrong column name from the schema.'), 'field-property'),
+      createSupplementalFixErrorSpec('ERROR: function make_badge(text, integer, text) does not exist', ['SELECT make_badge(name, rank)', 'FROM players', 'WHERE id = make_badge(name, rank, \'A+\');', ''], 3, bi('นับ argument ของฟังก์ชัน SQL ให้ตรงกับ signature ที่มีจริง', 'Count the SQL function arguments against a real signature.'), bi('บรรทัดนี้เรียกฟังก์ชันด้วยจำนวน argument ที่ไม่ตรง', 'This line calls the function with the wrong number of arguments.'), 'arity'),
+      createSupplementalFixErrorSpec('ERROR: operator does not exist: integer + text', ['SELECT score', 'FROM players', 'WHERE (score + \'1\') > 9;', ''], 3, bi('ดูชนิดข้อมูลสองฝั่งของ operator ก่อนตอบ', 'Inspect the operand types on both sides of the operator before answering.'), bi('บรรทัดนี้ผสม integer กับ text ใน operator เดียวกัน', 'This line mixes an integer with text in one operator.'), 'type-mismatch'),
+      createSupplementalFixErrorSpec('ERROR: division by zero', ['SELECT score', 'FROM players', 'WHERE score / 0 > 1;', ''], 3, bi('อย่ามองแค่อาการปลายทาง ให้ย้อนดู operand ที่ทำให้ expression ใช้ต่อไม่ได้', 'Do not stare only at the symptom; trace the operand that makes the expression impossible.'), bi('บรรทัดนี้หารด้วยศูนย์โดยตรง จึงเป็นจุดที่ทำให้ expression พังจริง', 'This line divides by zero directly, so it is the true breaking point in the expression.'), 'range'),
+      createSupplementalFixErrorSpec('ERROR: null value in column "api_key" violates not-null constraint', ['INSERT INTO integrations(api_key)', 'VALUES (NULL);', 'SELECT 1;', ''], 2, bi('ย้อนดูว่าค่าที่ถูก insert ยังเป็นค่าว่างหรือไม่', 'Trace whether the inserted value is still null.'), bi('บรรทัดนี้ส่งค่า null เข้า column ที่ไม่รับ null', 'This line inserts a null into a column that does not allow null values.'), 'null-access'),
+      createSupplementalFixErrorSpec('ERROR: syntax error at or near "FORM"', ['SELECT name', 'FORM players', 'WHERE id = 7;', ''], 2, bi('เช็ก keyword หลักของ query ก่อน เพราะ parser จะพังตั้งแต่บรรทัดนี้', 'Check the core query keyword first because the parser breaks from this line.'), bi('บรรทัดนี้ใช้ keyword ผิดจาก FROM จึงเป็น syntax root cause', 'This line uses the wrong keyword instead of FROM, making it the syntax root cause.'), 'syntax'),
+      createSupplementalFixErrorSpec('ERROR: function cound(integer) does not exist', ['SELECT cound(id)', 'FROM players', 'WHERE id > 0;', ''], 1, bi('เช็กชื่อฟังก์ชัน aggregate ให้ครบทุกตัวอักษร', 'Check the aggregate function name character by character.'), bi('บรรทัดนี้สะกดชื่อฟังก์ชันผิดจาก COUNT', 'This line misspells the function name from COUNT.'), 'method-typo'),
+      createSupplementalFixErrorSpec('ERROR: column "currnt_rank" does not exist', ['SELECT currnt_rank', 'FROM players', 'WHERE id = 7;', ''], 1, bi('เทียบชื่อ column ที่อ่านกับ schema จริง', 'Compare the selected column name with the real schema.'), bi('บรรทัดนี้อ้าง column ผิดชื่อจากของจริง', 'This line references the wrong column name.'), 'name-typo'),
+      createSupplementalFixErrorSpec('ERROR: missing FROM-clause entry for table "statz"', ['SELECT statz.total', 'FROM player_stats AS stats', 'WHERE stats.user_id = 7;', ''], 1, bi('เริ่มจาก alias/table name ที่ถูกอ้างก่อน เพราะอาการปลายทางจะหลอกไปที่ column', 'Start with the referenced alias/table name because the downstream symptom will try to blame the column.'), bi('บรรทัดนี้อ้าง alias ผิดชื่อจาก stats เป็น statz', 'This line references the wrong alias name, changing stats to statz.'), 'field-property', 'symptom-vs-root'),
+      createSupplementalFixErrorSpec('ERROR: function trim(text, text) does not exist', ['SELECT trim(name)', 'FROM players', 'WHERE trim(name, \'A\') = \'Ada\';', ''], 3, bi('นับ argument ของฟังก์ชันที่ถูกเรียกในบรรทัดเงื่อนไขให้ตรงกับ signature', 'Count the function arguments in the predicate line against the real signature.'), bi('บรรทัดนี้เรียก trim ด้วยจำนวน argument ที่ไม่ตรงกับของจริง', 'This line calls trim with the wrong number of arguments.'), 'arity'),
+    ],
+    count,
+  )
+}
+
 const createFixErrorQuestionBanks = (): Record<FixErrorSupportedLanguageId, Record<Difficulty, FixErrorQuestionBankItem[]>> => ({
   python: createPythonBank(),
   java: createJavaBank(),
@@ -2745,6 +3155,18 @@ const validateFixErrorBank = (language: FixErrorSupportedLanguageId, difficulty:
     return `${extractLogHead(item.errorText.en)}|||${culprit}|||${item.familyId}`
   })
 
+  const familyCoverage = new Set(bank.map((item) => item.familyId)).size
+  if (familyCoverage < 6) {
+    throw new Error(`Fix-error family coverage is too thin for ${language}/${difficulty}: expected at least 6 families, received ${familyCoverage}.`)
+  }
+
+  const patternGroupCoverage = new Set(bank.map((item) => item.patternGroupId)).size
+  if (patternGroupCoverage < 15) {
+    throw new Error(
+      `Fix-error pattern-group coverage is too thin for ${language}/${difficulty}: expected at least 15 groups, received ${patternGroupCoverage}.`,
+    )
+  }
+
   for (const item of bank) {
     if (item.difficulty !== difficulty) {
       throw new Error(`Expected ${difficulty} metadata for ${item.id} but received ${item.difficulty}.`)
@@ -2754,6 +3176,7 @@ const validateFixErrorBank = (language: FixErrorSupportedLanguageId, difficulty:
     assertLocalizedTextPresent(item.hint, `${item.id} hint`)
     assertLocalizedTextPresent(item.explanation.correct, `${item.id} explanation.correct`)
     assertStringPresent(item.snippetText, `${item.id} snippetText`)
+    assertStringPresent(item.patternGroupId, `${item.id} patternGroupId`)
     assertStringPresent(item.familyId, `${item.id} familyId`)
 
     if (item.guideTags.length === 0) {

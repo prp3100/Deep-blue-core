@@ -128,6 +128,7 @@ export type FixErrorQuestionSeed = {
   track: QuizTrackId
   language: LanguageId
   difficulty: Difficulty
+  patternGroupId: string
   familyId: FixErrorPatternFamilyId
   lineRoles: [FixErrorLineRole, FixErrorLineRole, FixErrorLineRole, FixErrorLineRole]
   hintAnchor: FixErrorHintAnchor
@@ -159,6 +160,7 @@ export type DebugQuestionSeed = {
   track: QuizTrackId
   language: LanguageId
   difficulty: Difficulty
+  patternGroupId: string
   scenario: LocalizedText
   logText: LocalizedText
   snippetText: string

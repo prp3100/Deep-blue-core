@@ -257,6 +257,65 @@ export const shuffleList = <T,>(items: T[]) => {
   return shuffled
 }
 
+type PatternGroupedItem = {
+  patternGroupId: string
+}
+
+const countUniquePatternGroups = <T extends PatternGroupedItem>(items: readonly T[]) =>
+  new Set(items.map((item) => item.patternGroupId)).size
+
+const assertPatternGroupCapacity = <T extends PatternGroupedItem>(
+  items: readonly T[],
+  totalQuestions: number,
+  label: string,
+) => {
+  if (countUniquePatternGroups(items) < totalQuestions) {
+    throw new Error(`Unable to build a ${totalQuestions}-question ${label} session without repeating pattern groups.`)
+  }
+}
+
+export const takeUniquePatternGroupItems = <T extends PatternGroupedItem>(
+  items: readonly T[],
+  totalQuestions: number,
+  label: string,
+) => {
+  assertPatternGroupCapacity(items, totalQuestions, label)
+
+  const selected: T[] = []
+  const seenGroups = new Set<string>()
+
+  for (const item of shuffleList([...items])) {
+    if (seenGroups.has(item.patternGroupId)) {
+      continue
+    }
+
+    seenGroups.add(item.patternGroupId)
+    selected.push(item)
+
+    if (selected.length === totalQuestions) {
+      break
+    }
+  }
+
+  if (selected.length !== totalQuestions) {
+    throw new Error(`Unable to build a ${totalQuestions}-question ${label} session without repeating pattern groups.`)
+  }
+
+  return selected
+}
+
+export const popNextUniquePatternGroup = <T extends PatternGroupedItem>(queue: T[] | undefined, seenGroups: Set<string>) => {
+  while (queue && queue.length > 0) {
+    const nextQuestion = queue.pop()
+    if (nextQuestion && !seenGroups.has(nextQuestion.patternGroupId)) {
+      seenGroups.add(nextQuestion.patternGroupId)
+      return nextQuestion
+    }
+  }
+
+  return null
+}
+
 type CreateIdentifyLanguageSessionOptions = {
   priorityTopics?: LanguageId[]
   priorityTopicLimit?: number
@@ -358,7 +417,11 @@ const createFixErrorSingleLanguageSession = (
   difficulty: Difficulty,
   totalQuestions: number,
 ): FixErrorQuizQuestion[] => {
-  const selected = shuffleList(fixErrorQuestionBanks[language][difficulty]).slice(0, totalQuestions)
+  const selected = takeUniquePatternGroupItems(
+    fixErrorQuestionBanks[language][difficulty],
+    totalQuestions,
+    `fix-error/${language}/${difficulty}`,
+  )
 
   if (selected.length !== totalQuestions) {
     throw new Error(`Unable to build a ${totalQuestions}-question fix-error session for ${language}.`)
@@ -375,7 +438,11 @@ const createDebugSingleLanguageSession = (
   difficulty: Difficulty,
   totalQuestions: number,
 ): DebugQuizQuestion[] => {
-  const selected = shuffleList(debugQuestionBanks[language][difficulty]).slice(0, totalQuestions)
+  const selected = takeUniquePatternGroupItems(
+    debugQuestionBanks[language][difficulty],
+    totalQuestions,
+    `debug/${language}/${difficulty}`,
+  )
 
   if (selected.length !== totalQuestions) {
     throw new Error(`Unable to build a ${totalQuestions}-question debug session for ${language}.`)
@@ -393,11 +460,20 @@ const createFixErrorAllSession = (
   totalQuestions: number,
   label: string,
 ): FixErrorQuizQuestion[] => {
+  const totalUniquePatternGroups = new Set(
+    languages.flatMap((language) => fixErrorQuestionBanks[language][difficulty].map((item) => item.patternGroupId)),
+  ).size
+
+  if (totalUniquePatternGroups < totalQuestions) {
+    throw new Error(`Unable to build a ${totalQuestions}-question ${label} fix-error session without repeating pattern groups.`)
+  }
+
   const grouped = new Map<FixErrorSupportedLanguageId, FixErrorQuestionBankItem[]>(
     languages.map((language) => [language, shuffleList(fixErrorQuestionBanks[language][difficulty])]),
   )
 
   const selected: FixErrorQuestionBankItem[] = []
+  const seenGroups = new Set<string>()
 
   while (selected.length < totalQuestions) {
     const cycleLanguages = shuffleList(
@@ -418,7 +494,7 @@ const createFixErrorAllSession = (
       }
 
       const queue = grouped.get(language)
-      const nextQuestion = queue?.pop()
+      const nextQuestion = popNextUniquePatternGroup(queue, seenGroups)
 
       if (nextQuestion) {
         selected.push(nextQuestion)
@@ -460,11 +536,20 @@ const createDebugAllSession = (
   totalQuestions: number,
   label: string,
 ): DebugQuizQuestion[] => {
+  const totalUniquePatternGroups = new Set(
+    languages.flatMap((language) => debugQuestionBanks[language][difficulty].map((item) => item.patternGroupId)),
+  ).size
+
+  if (totalUniquePatternGroups < totalQuestions) {
+    throw new Error(`Unable to build a ${totalQuestions}-question ${label} debug session without repeating pattern groups.`)
+  }
+
   const grouped = new Map<DebugSupportedLanguageId, DebugQuestionBankItem[]>(
     languages.map((language) => [language, shuffleList(debugQuestionBanks[language][difficulty])]),
   )
 
   const selected: DebugQuestionBankItem[] = []
+  const seenGroups = new Set<string>()
 
   while (selected.length < totalQuestions) {
     const cycleLanguages = shuffleList(
@@ -485,7 +570,7 @@ const createDebugAllSession = (
       }
 
       const queue = grouped.get(language)
-      const nextQuestion = queue?.pop()
+      const nextQuestion = popNextUniquePatternGroup(queue, seenGroups)
 
       if (nextQuestion) {
         selected.push(nextQuestion)

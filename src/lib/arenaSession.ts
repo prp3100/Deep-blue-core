@@ -46,7 +46,9 @@ import {
   createFixErrorSession,
   createIdentifyLanguageSession,
   createVocabSession,
+  popNextUniquePatternGroup,
   shuffleList,
+  takeUniquePatternGroupItems,
   type DebugQuizQuestion,
   type FixErrorQuizQuestion,
   type IdentifyLanguageQuizQuestion,
@@ -298,7 +300,11 @@ const createBrutalFixErrorSingleLanguageSession = (
   language: FixErrorSupportedLanguageId,
   totalQuestions: number,
 ): FixErrorQuizQuestion[] => {
-  const selected = shuffleList(brutalFixErrorQuestionBanks[language]).slice(0, totalQuestions)
+  const selected = takeUniquePatternGroupItems(
+    brutalFixErrorQuestionBanks[language],
+    totalQuestions,
+    `arena-brutal/fix-error/${language}`,
+  )
 
   if (selected.length !== totalQuestions) {
     throw new Error(`Unable to build a ${totalQuestions}-question brutal fix-error session for ${language}.`)
@@ -315,11 +321,20 @@ const createBrutalFixErrorAllSession = (
   totalQuestions: number,
   label: string,
 ): FixErrorQuizQuestion[] => {
+  const totalUniquePatternGroups = new Set(
+    languages.flatMap((language) => brutalFixErrorQuestionBanks[language].map((item) => item.patternGroupId)),
+  ).size
+
+  if (totalUniquePatternGroups < totalQuestions) {
+    throw new Error(`Unable to build a ${totalQuestions}-question ${label} brutal fix-error session without repeating pattern groups.`)
+  }
+
   const grouped = new Map<FixErrorSupportedLanguageId, FixErrorQuestionBankItem[]>(
     languages.map((language) => [language, shuffleList(brutalFixErrorQuestionBanks[language])]),
   )
 
   const selected: FixErrorQuestionBankItem[] = []
+  const seenGroups = new Set<string>()
 
   while (selected.length < totalQuestions) {
     const cycleLanguages = shuffleList(
@@ -340,7 +355,7 @@ const createBrutalFixErrorAllSession = (
       }
 
       const queue = grouped.get(language)
-      const nextQuestion = queue?.pop()
+      const nextQuestion = popNextUniquePatternGroup(queue, seenGroups)
 
       if (nextQuestion) {
         selected.push(nextQuestion)
@@ -381,7 +396,11 @@ const createBrutalDebugSingleLanguageSession = (
   language: DebugSupportedLanguageId,
   totalQuestions: number,
 ): DebugQuizQuestion[] => {
-  const selected = shuffleList(brutalDebugQuestionBanks[language]).slice(0, totalQuestions)
+  const selected = takeUniquePatternGroupItems(
+    brutalDebugQuestionBanks[language],
+    totalQuestions,
+    `arena-brutal/debug/${language}`,
+  )
 
   if (selected.length !== totalQuestions) {
     throw new Error(`Unable to build a ${totalQuestions}-question brutal debug session for ${language}.`)
@@ -398,11 +417,20 @@ const createBrutalDebugAllSession = (
   totalQuestions: number,
   label: string,
 ): DebugQuizQuestion[] => {
+  const totalUniquePatternGroups = new Set(
+    languages.flatMap((language) => brutalDebugQuestionBanks[language].map((item) => item.patternGroupId)),
+  ).size
+
+  if (totalUniquePatternGroups < totalQuestions) {
+    throw new Error(`Unable to build a ${totalQuestions}-question ${label} brutal debug session without repeating pattern groups.`)
+  }
+
   const grouped = new Map<DebugSupportedLanguageId, DebugQuestionBankItem[]>(
     languages.map((language) => [language, shuffleList(brutalDebugQuestionBanks[language])]),
   )
 
   const selected: DebugQuestionBankItem[] = []
+  const seenGroups = new Set<string>()
 
   while (selected.length < totalQuestions) {
     const cycleLanguages = shuffleList(
@@ -423,7 +451,7 @@ const createBrutalDebugAllSession = (
       }
 
       const queue = grouped.get(language)
-      const nextQuestion = queue?.pop()
+      const nextQuestion = popNextUniquePatternGroup(queue, seenGroups)
 
       if (nextQuestion) {
         selected.push(nextQuestion)

@@ -35,6 +35,7 @@ type DebugQuestionSpec = {
   lines: [string, string, string, string]
   snippetText: string
   cause: DebugCauseKey
+  patternGroupId?: string
   choiceKeys?: [DebugCauseKey, DebugCauseKey, DebugCauseKey, DebugCauseKey]
   hint?: LocalizedText
   explanation?: LocalizedText
@@ -435,6 +436,30 @@ const createHardDebugSpec = (
   ),
 })
 
+const getSupplementalDebugSpecs = (language: DebugSupportedLanguageId): DebugQuestionSpec[] => {
+  switch (language) {
+    case 'python':
+    case 'renpy-python':
+      return buildPythonStyleSupplementalDebugSpecs()
+    case 'javascript':
+    case 'jsx':
+    case 'typescript':
+    case 'cloud-functions':
+    case 'phaser-typescript':
+    case 'rpg-maker-js':
+    case 'cocos-typescript':
+      return buildJsStyleSupplementalDebugSpecs(language)
+    case 'roblox-lua':
+    case 'love2d-lua':
+    case 'defold-lua':
+    case 'godot-gdscript':
+    case 'gamemaker-gml':
+      return buildLuaStyleSupplementalDebugSpecs(language)
+    default:
+      return buildTypedStyleSupplementalDebugSpecs(language)
+  }
+}
+
 const createQuestion = (
   language: DebugSupportedLanguageId,
   itemIndex: number,
@@ -455,6 +480,12 @@ const createQuestion = (
     track: getDebugTrack(language),
     language,
     difficulty,
+    patternGroupId:
+      item.patternGroupId ??
+      `${language}::${item.cause}::${normalizeSurface(extractLogHead(item.logText.en) || item.logText.en)}::${normalizeSurface(getDebugFocusLine(item))}`.slice(
+        0,
+        240,
+      ),
     scenario: item.scenario,
     logText: item.logText,
     snippetText: item.snippetText,
@@ -473,25 +504,26 @@ const createDifficultyBank = (
   difficulty: Difficulty,
 ) => {
   const targetSize = getDebugTrack(language) === 'game-dev' ? DEBUG_GAME_BANK_SIZE : DEBUG_CORE_BANK_SIZE
+  const sourceItems = [...items, ...getSupplementalDebugSpecs(language)]
   const expandedItems =
     difficulty === 'hard'
       ? (() => {
-          const hardBaseItems = items.map((item, index) => createHardDebugSpec(language, item, index))
+          const hardBaseItems = sourceItems.map((item, index) => createHardDebugSpec(language, item, index))
           return hardBaseItems.length >= targetSize
             ? hardBaseItems.slice(0, targetSize)
             : [
                 ...hardBaseItems,
                 ...Array.from({ length: targetSize - hardBaseItems.length }, (_, index) =>
-                  createHardDebugSpec(language, items[index % items.length], index + items.length),
+                  createHardDebugSpec(language, sourceItems[index % sourceItems.length], index + sourceItems.length),
                 ),
               ]
         })()
-      : items.length >= targetSize
-        ? items.slice(0, targetSize)
+      : sourceItems.length >= targetSize
+        ? sourceItems.slice(0, targetSize)
         : [
-            ...items,
-            ...Array.from({ length: targetSize - items.length }, (_, index) =>
-              createDebugVariant(language, items[index % items.length], index),
+            ...sourceItems,
+            ...Array.from({ length: targetSize - sourceItems.length }, (_, index) =>
+              createDebugVariant(language, sourceItems[index % sourceItems.length], index),
             ),
           ]
 
@@ -1654,6 +1686,126 @@ const createGmlDebugBank = (language: DebugSupportedLanguageId) => {
   return createBank(language, items)
 }
 
+function buildPythonStyleSupplementalDebugSpecs(): DebugQuestionSpec[] {
+  return [
+    {
+      ...makeSpec('config', "ConnectionError: service handshake failed after auth retry", ['api_key = os.environ["API_KEy"]', 'client = build_client(api_key)', 'report = client.fetch()', 'print(report)']),
+      scenario: bi('ระบบค้างตอนคุยกับ service หลัง retry หลายรอบ', 'The service stalls after several retries during handshake.'),
+      patternGroupId: 'supp-python-config-auth-retry',
+      hint: bi('อย่ามองแค่ log ปลายทาง ให้ย้อนกลับไปดู key ที่อ่านมาก่อนสร้าง client', 'Do not stare at the downstream log alone. Trace back to the key loaded before the client is built.'),
+    },
+    {
+      ...makeSpec('field', "TypeError: 'NoneType' object is not subscriptable", ['payload = fetch_report()', 'summary = payload["meta"]["summary"]', 'print(summary["total"])', 'return summary']),
+      scenario: bi('หน้าสรุปล่มตอน render ตอนท้าย แม้ fetch ผ่านแล้ว', 'The summary screen crashes late in render even though fetch already succeeded.'),
+      patternGroupId: 'supp-python-field-meta-summary',
+      hint: bi('แยกอาการปลายทางออกจาก root cause แล้วไล่ดู path ของข้อมูลที่ถูกอ่าน', 'Separate the downstream symptom from the root cause and inspect the data path being read.'),
+    },
+    {
+      ...makeSpec('selector', "AttributeError: 'NoneType' object has no attribute 'text'", ['title = soup.select_one("#score-panl")', 'label = title.text.strip()', 'print(label)', 'return label']),
+      scenario: bi('ข้อความ HUD ไม่ขึ้นแล้วล่มตอนสรุป label', 'The HUD text never appears and the label step crashes later.'),
+      patternGroupId: 'supp-python-selector-score-panel',
+      hint: bi('เริ่มจากบรรทัดหา target ก่อน ไม่ใช่บรรทัดที่อาการระเบิดออกมา', 'Start from the lookup line, not the later symptom line.'),
+    },
+    {
+      ...makeSpec('typo', "AttributeError: 'dict' object has no attribute 'mergge'", ['profile = {"name": "Ada"}', 'profile.mergge({"rank": "A"})', 'print(profile)', 'return profile']),
+      scenario: bi('ขั้น merge โปรไฟล์พังก่อนบันทึกผล', 'The profile merge step breaks before saving results.'),
+      patternGroupId: 'supp-python-typo-merge',
+      hint: bi('เช็กชื่อ method ที่ถูกเรียกให้ครบทุกตัวอักษร', 'Check the called method name character by character.'),
+    },
+  ]
+}
+
+function buildJsStyleSupplementalDebugSpecs(language: DebugSupportedLanguageId): DebugQuestionSpec[] {
+  const selectorLine =
+    language === 'phaser-typescript'
+      ? 'const hud = this.children.getByName("score-panl")'
+      : language === 'rpg-maker-js'
+        ? 'const hud = SceneManager._scene.findChildByName("score-panl")'
+        : language === 'cocos-typescript'
+          ? 'const hud = this.node.getChildByName("score-panl")'
+          : 'const hud = document.querySelector("#score-panl")'
+
+  return [
+    {
+      ...makeSpec('config', 'Error: request signed with an empty API key', ['const apiKey = process.env.API_KEy', 'const client = createClient(apiKey)', 'const report = await client.fetch()', 'console.log(report)']),
+      scenario: bi('รอบ retry หลังบ้านพาไปโฟกัส auth failure ตอนปลายทาง', 'The backend retry cycle pushes attention toward a late auth failure.'),
+      patternGroupId: `supp-${language}-config-api-key`,
+    },
+    {
+      ...makeSpec('field', "TypeError: Cannot read properties of undefined (reading 'total')", ['const payload = await fetchReport()', 'const summary = payload.meta.summary', 'console.log(summary.total)', 'return summary']),
+      scenario: bi('หน้า summary ผ่าน fetch มาแล้วแต่ยังล่มตอนท้าย flow', 'The summary page survives fetch but still collapses late in the flow.'),
+      patternGroupId: `supp-${language}-field-meta-summary`,
+    },
+    {
+      ...makeSpec('selector', "TypeError: Cannot read properties of null (reading 'classList')", [selectorLine, 'hud.classList.add("ready")', 'console.log("done")', 'return']),
+      scenario: bi('อาการล่มโผล่ตอนแตะ UI ปลายทาง แต่ต้นเหตุมาจาก lookup ก่อนหน้า', 'The crash appears during late UI work, but the root cause starts in the earlier lookup.'),
+      patternGroupId: `supp-${language}-selector-score-panel`,
+    },
+    {
+      ...makeSpec('typo', 'TypeError: cache.claer is not a function', ['const cache = new Map()', 'cache.claer()', 'console.log("done")', 'return']),
+      scenario: bi('ขั้น clear cache พังและ log พยายามพาไปมอง state หลังบ้านแทน', 'The cache clear step breaks and the log tries to pull attention toward later state fallout.'),
+      patternGroupId: `supp-${language}-typo-cache-clear`,
+    },
+  ]
+}
+
+function buildLuaStyleSupplementalDebugSpecs(language: DebugSupportedLanguageId): DebugQuestionSpec[] {
+  const selectorLine =
+    language === 'godot-gdscript'
+      ? '$HUD/ScorePanl'
+      : language === 'gamemaker-gml'
+        ? 'layer_get_element("score_panl")'
+        : 'ui:find("score_panl")'
+
+  return [
+    {
+      ...makeSpec('config', 'auth retry failed: missing API key', ['local api_key = ENV.API_KEy', 'local client = build_client(api_key)', 'local report = client:fetch()', 'print(report)']),
+      scenario: bi('ระบบล้มหลัง retry หลายรอบและ log โยนความสนใจไปที่ auth ตอนท้าย', 'The system fails after several retries and the log points attention at late auth trouble.'),
+      patternGroupId: `supp-${language}-config-api-key`,
+    },
+    {
+      ...makeSpec('field', 'attempt to index field \'summary\' (a nil value)', ['local payload = fetch_report()', 'local summary = payload.meta.summary', 'print(summary.total)', 'return summary']),
+      scenario: bi('หน้าสรุปล่มตอนท้ายทั้งที่ขั้นโหลดผ่านแล้ว', 'The summary screen crashes late even though the loading step succeeded.'),
+      patternGroupId: `supp-${language}-field-meta-summary`,
+    },
+    {
+      ...makeSpec('selector', 'attempt to index a nil value', [`local hud = ${selectorLine}`, 'hud.visible = true', 'print("done")', 'return']),
+      scenario: bi('อาการระเบิดโผล่ตอนใช้งาน HUD แต่ต้นเหตุเริ่มจากการหา target', 'The visible crash shows up during HUD usage, but the root cause starts in target lookup.'),
+      patternGroupId: `supp-${language}-selector-score-panel`,
+    },
+    {
+      ...makeSpec('typo', "attempt to call method 'claer' (a nil value)", ['local cache = Cache.new()', 'cache:claer()', 'print("done")', 'return']),
+      scenario: bi('ขั้น clear cache พังและบรรทัดข้าง ๆ ถูกวางมาให้ดูน่าสงสัยเหมือนกัน', 'The cache clear step breaks and nearby lines were staged to look suspicious too.'),
+      patternGroupId: `supp-${language}-typo-cache-clear`,
+    },
+  ]
+}
+
+function buildTypedStyleSupplementalDebugSpecs(language: DebugSupportedLanguageId): DebugQuestionSpec[] {
+  return [
+    {
+      ...makeSpec('config', 'Connection retry failed because the service key is empty', ['var apiKey = ENV.API_KEy;', 'var client = buildClient(apiKey);', 'var report = client.fetch();', 'print(report);']),
+      scenario: bi('ระบบล้มตอนคุยกับ service หลังผ่าน retry ไปแล้วหลายรอบ', 'The system fails while talking to the service after several retries.'),
+      patternGroupId: `supp-${language}-config-api-key`,
+    },
+    {
+      ...makeSpec('field', 'Property summary is missing', ['var payload = fetchReport();', 'var summary = payload.meta.summary;', 'print(summary.total);', 'return summary;']),
+      scenario: bi('หน้าสรุปพังตอนท้าย flow แม้ขั้นโหลดรายงานผ่านแล้ว', 'The summary screen breaks late in the flow even though the report load succeeded.'),
+      patternGroupId: `supp-${language}-field-meta-summary`,
+    },
+    {
+      ...makeSpec('selector', 'Target lookup returned null before UI update', ['var hud = findNode("hud/score-panl");', 'hud.show();', 'print("done");', 'return;']),
+      scenario: bi('อาการโผล่ตอนอัปเดต UI แต่ root cause ซ่อนอยู่ในบรรทัดหา target', 'The symptom appears during UI update, but the root cause hides in the target lookup line.'),
+      patternGroupId: `supp-${language}-selector-score-panel`,
+    },
+    {
+      ...makeSpec('typo', "Method 'claer' does not exist", ['var cache = new Cache();', 'cache.claer();', 'print("done");', 'return;']),
+      scenario: bi('ขั้น clear cache พังก่อน save และ log พยายามพาไปสนใจอาการปลายทาง', 'The cache clear step breaks before save and the log tries to pull attention toward the downstream symptom.'),
+      patternGroupId: `supp-${language}-typo-cache-clear`,
+    },
+  ]
+}
+
 const createDebugQuestionBanks = (): Record<DebugSupportedLanguageId, Record<Difficulty, DebugQuestionBankItem[]>> => ({
   python: createPythonDebugBank('python'),
   java: createJavaDebugBank(),
@@ -1698,13 +1850,21 @@ const validateDebugBank = (language: DebugSupportedLanguageId, difficulty: Diffi
     throw new Error(`Expected ${expectedSize} ${difficulty} questions for ${language} but received ${bank.length}.`)
   }
 
-  if (difficulty === 'easy') {
-    assertNoDuplicateSurface(
-      bank,
-      `${language}/${difficulty}/debug freshness`,
-      (item) =>
-        `${item.scenario.th}|||${item.scenario.en}|||${item.answer}|||${extractLogHead(item.logText.en)}|||${item.snippetText}`,
-    )
+  assertNoDuplicateSurface(
+    bank,
+    `${language}/${difficulty}/debug freshness`,
+    (item) =>
+      `${item.scenario.th}|||${item.scenario.en}|||${item.answer}|||${extractLogHead(item.logText.en)}|||${item.snippetText}`,
+  )
+  assertNoDuplicateSurface(
+    bank,
+    `${language}/${difficulty}/debug culprit freshness`,
+    (item) => `${item.answer}|||${extractLogHead(item.logText.en)}|||${normalizeSurface(item.snippetText)}`,
+  )
+
+  const patternGroupCoverage = new Set(bank.map((item) => item.patternGroupId)).size
+  if (patternGroupCoverage < 15) {
+    throw new Error(`Debug pattern-group coverage is too thin for ${language}/${difficulty}: expected at least 15 groups, received ${patternGroupCoverage}.`)
   }
 
   for (const item of bank) {
@@ -1717,6 +1877,7 @@ const validateDebugBank = (language: DebugSupportedLanguageId, difficulty: Diffi
     assertLocalizedTextPresent(item.hint, `${item.id} hint`)
     assertLocalizedTextPresent(item.explanation.correct, `${item.id} explanation.correct`)
     assertStringPresent(item.snippetText, `${item.id} snippetText`)
+    assertStringPresent(item.patternGroupId, `${item.id} patternGroupId`)
 
     if (item.choices.length !== 4) {
       throw new Error(`Expected 4 choices for ${item.id}.`)

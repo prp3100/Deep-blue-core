@@ -214,9 +214,10 @@ export function GuidePage({
     const resolvedIndex = exampleIndexes && exampleIndexes.length > 0 ? exampleIndexes[index % exampleIndexes.length] : index % bank.length
     return bank[resolvedIndex % bank.length]
   }
-  const getDebugExample = (topicId: DebugSupportedLanguageId, index: number) => {
+  const getDebugExample = (topicId: DebugSupportedLanguageId, index: number, exampleIndexes?: number[]) => {
     const bank = debugQuestionBanks[topicId][effectiveGuideLevel]
-    return bank[index % bank.length]
+    const resolvedIndex = exampleIndexes && exampleIndexes.length > 0 ? exampleIndexes[index % exampleIndexes.length] : index % bank.length
+    return bank[resolvedIndex % bank.length]
   }
   const getVocabExample = (topicId: VocabSupportedLanguageId, index: number) => {
     const bank = [...vocabQuestionBanks[topicId].easy, ...vocabQuestionBanks[topicId].hard]
@@ -594,7 +595,11 @@ export function GuidePage({
                   : null
               const activeDebugExample =
                 isDebugSupportedLanguage(topicId) && debugInsight
-                  ? getDebugExample(topicId, modeLens?.type === 'debug' && modeLens.topicId === topicId ? modeLens.index : 0)
+                  ? getDebugExample(
+                      topicId,
+                      modeLens?.type === 'debug' && modeLens.topicId === topicId ? modeLens.index : 0,
+                      debugInsight.workedExampleIndexes,
+                    )
                   : null
               const activeVocabExample =
                 isVocabSupportedLanguage(topicId) && vocabInsight

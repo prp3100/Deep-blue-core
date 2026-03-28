@@ -24,6 +24,7 @@ type DebugGuideInsight = {
   causeLabels: LocalizedText[]
   sampleLogs: LocalizedText[]
   misleadingCauseLabels: LocalizedText[]
+  workedExampleIndexes: number[]
 }
 
 type VocabGuideInsight = {
@@ -128,18 +129,54 @@ const pickFixErrorWorkedExampleIndexes = (
 ) => {
   const indexes: number[] = []
   const seenFamilies = new Set<string>()
+  const seenPatternGroups = new Set<string>()
 
   bankItems.forEach((item, index) => {
-    if (indexes.length >= targetCount || seenFamilies.has(item.familyId)) {
+    if (indexes.length >= targetCount || seenFamilies.has(item.familyId) || seenPatternGroups.has(item.patternGroupId)) {
       return
     }
 
     seenFamilies.add(item.familyId)
+    seenPatternGroups.add(item.patternGroupId)
     indexes.push(index)
   })
 
   if (indexes.length < Math.min(2, targetCount)) {
     throw new Error('Worked example coverage collapsed to too few fix-error families.')
+  }
+
+  return indexes
+}
+
+const pickDebugWorkedExampleIndexes = (
+  bankItems: (typeof debugQuestionBanks)[DebugSupportedLanguageId][Difficulty],
+  targetCount: number,
+) => {
+  const indexes: number[] = []
+  const seenPatternGroups = new Set<string>()
+  const seenAnswers = new Set<string>()
+
+  bankItems.forEach((item, index) => {
+    if (indexes.length >= targetCount || seenPatternGroups.has(item.patternGroupId) || seenAnswers.has(item.answer)) {
+      return
+    }
+
+    seenPatternGroups.add(item.patternGroupId)
+    seenAnswers.add(item.answer)
+    indexes.push(index)
+  })
+
+  for (const [index, item] of bankItems.entries()) {
+    if (indexes.length >= targetCount || seenPatternGroups.has(item.patternGroupId)) {
+      continue
+    }
+
+    seenPatternGroups.add(item.patternGroupId)
+    indexes.push(index)
+  }
+
+  if (indexes.length < Math.min(2, targetCount)) {
+    throw new Error('Worked example coverage collapsed to too few debug pattern groups.')
   }
 
   return indexes
@@ -197,21 +234,27 @@ const collectDebugGuideInsights = (difficulty: Difficulty) =>
       }
 
       const bankItems = debugQuestionBanks[languageId][difficulty]
+      const workedExampleIndexes = pickDebugWorkedExampleIndexes(bankItems, difficulty === 'hard' ? 4 : 4)
       const causeLabels = uniqueLocalized(
-        bankItems
+        workedExampleIndexes
+          .map((index) => bankItems[index])
           .map((item) => item.choices.find((choice) => choice.id === item.answer)?.label)
           .filter((value): value is LocalizedText => Boolean(value)),
-      ).slice(0, difficulty === 'hard' ? 7 : 6)
-      const sampleLogs = uniqueLocalized(bankItems.map((item) => shortenText(item.logText, difficulty === 'hard' ? 92 : 86))).slice(0, 4)
+      ).slice(0, difficulty === 'hard' ? 6 : 5)
+      const sampleLogs = uniqueLocalized(
+        workedExampleIndexes.map((index) => shortenText(bankItems[index]?.logText ?? bankItems[0].logText, difficulty === 'hard' ? 92 : 86)),
+      ).slice(0, 4)
       const misleadingCauseLabels = uniqueLocalized(
-        bankItems.flatMap((item) => item.choices.filter((choice) => choice.id !== item.answer).map((choice) => choice.label)),
+        workedExampleIndexes.flatMap((index) =>
+          (bankItems[index]?.choices ?? []).filter((choice) => choice.id !== bankItems[index]?.answer).map((choice) => choice.label),
+        ),
       ).slice(0, 4)
 
-      if (causeLabels.length === 0 || sampleLogs.length === 0 || misleadingCauseLabels.length === 0) {
+      if (causeLabels.length === 0 || sampleLogs.length === 0 || misleadingCauseLabels.length === 0 || workedExampleIndexes.length < 2) {
         throw new Error(`Missing Debug ${difficulty} guide insight coverage for ${languageId}.`)
       }
 
-      return [languageId, { causeLabels, sampleLogs, misleadingCauseLabels }]
+      return [languageId, { causeLabels, sampleLogs, misleadingCauseLabels, workedExampleIndexes }]
     }),
   ) as Record<DebugSupportedLanguageId, DebugGuideInsight>
 
