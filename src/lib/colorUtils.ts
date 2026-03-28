@@ -281,7 +281,11 @@ export const extractDominantColor = async (imageUrl: string): Promise<string> =>
       resolve('#6B8FAD')
     }
     img.src =
-      imageUrl.includes('ytimg.com') || imageUrl.includes('youtube.com') || imageUrl.includes('soundcloud')
+      imageUrl.includes('ytimg.com') ||
+      imageUrl.includes('youtube.com') ||
+      imageUrl.includes('soundcloud') ||
+      imageUrl.includes('scdn.co') ||
+      imageUrl.includes('spotify')
         ? `https://corsproxy.io/?${encodeURIComponent(imageUrl)}`
         : imageUrl
   })

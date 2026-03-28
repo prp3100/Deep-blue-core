@@ -40,6 +40,8 @@ import { getLanguageLabel, uiText } from '../lib/i18n'
 import type { ExtraCopy } from '../lib/extraCopy'
 import { panelClass, softSurfaceClass, hoverSurfaceClass } from '../components/layout/panelClasses'
 
+const MODEL_DISCOVERY_TIMEOUT_MS = 6500
+
 type ArenaPageProps = {
   locale: Locale
   formatCopy: ExtraCopy
@@ -309,9 +311,14 @@ export function ArenaPage({
     }
 
     const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => {
+    let timedOut = false
+    const deferredStartId = window.setTimeout(() => {
       setIsLoadingModels(true)
       setModelLoadError(null)
+      const requestTimeoutId = window.setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, MODEL_DISCOVERY_TIMEOUT_MS)
 
       void discoverArenaModels({
         config: {
@@ -330,15 +337,18 @@ export function ArenaPage({
           setModelLoadErrorKey('')
         })
         .catch((error) => {
-          if (controller.signal.aborted) {
+          if (controller.signal.aborted && !timedOut) {
             return
           }
           setDiscoveredModelKey('')
-          setModelLoadError(error instanceof Error ? error.message : copy.arenaModelLoadError)
+          setModelLoadError(
+            timedOut ? copy.arenaModelLoadTimeout : error instanceof Error ? error.message : copy.arenaModelLoadError,
+          )
           setModelLoadErrorKey(discoveryKey)
         })
         .finally(() => {
-          if (!controller.signal.aborted) {
+          window.clearTimeout(requestTimeoutId)
+          if (!controller.signal.aborted || timedOut) {
             setIsLoadingModels(false)
           }
         })
@@ -346,13 +356,14 @@ export function ArenaPage({
 
     return () => {
       controller.abort()
-      window.clearTimeout(timeoutId)
+      window.clearTimeout(deferredStartId)
     }
   }, [
     apiBaseUrl,
     apiKey,
     canAutoDiscoverModels,
     copy.arenaModelLoadError,
+    copy.arenaModelLoadTimeout,
     discoveryKey,
     extraFieldValue,
     modelRefreshNonce,

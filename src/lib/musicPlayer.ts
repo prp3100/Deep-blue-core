@@ -6,9 +6,9 @@ export type { MusicSourceType } from './musicTypes'
 export type MusicPlayerApi = {
   isPlaying: boolean
   source: MusicSourceType
-  playDirect: (url: string) => Promise<void>
   playYouTube: (videoId: string) => Promise<void>
   playSoundCloud: (url: string) => Promise<void>
+  playSpotify: (uri: string) => Promise<void>
   pause: () => void
   resume: () => Promise<void>
   stop: () => void
@@ -47,6 +47,32 @@ type SoundCloudWidgetInstance = {
   setVolume: (volume: number) => void
 }
 
+type SpotifyPlaybackUpdateEvent = {
+  data?: {
+    isPaused?: boolean
+    isBuffering?: boolean
+    playingURI?: string
+  }
+}
+
+type SpotifyEmbedController = {
+  loadUri: (spotifyUri: string) => void
+  play: () => void
+  pause: () => void
+  resume: () => void
+  restart: () => void
+  destroy: () => void
+  addListener: (eventName: string, handler: (event: SpotifyPlaybackUpdateEvent) => void) => void
+}
+
+type SpotifyIframeApi = {
+  createController: (
+    element: HTMLElement,
+    options: { uri: string; width?: number | string; height?: number | string },
+    callback: (controller: SpotifyEmbedController) => void,
+  ) => void
+}
+
 type YouTubeWindow = Window & {
   YT?: {
     Player?: new (elementId: string | HTMLElement, options: YTPlayerConstructorOptions) => YTPlayerInstance
@@ -56,6 +82,8 @@ type YouTubeWindow = Window & {
   SC?: {
     Widget: (element: HTMLIFrameElement) => SoundCloudWidgetInstance
   }
+  SpotifyIframeApi?: SpotifyIframeApi
+  onSpotifyIframeApiReady?: (iframeApi: SpotifyIframeApi) => void
 }
 
 const loadScript = (src: string, id: string) =>
@@ -92,6 +120,7 @@ const loadScript = (src: string, id: string) =>
   })
 
 let ytApiPromise: Promise<void> | null = null
+let spotifyApiPromise: Promise<SpotifyIframeApi> | null = null
 
 const loadYouTubeApi = () => {
   if (ytApiPromise) return ytApiPromise
@@ -139,17 +168,47 @@ const loadSoundCloudApi = () =>
       .catch(reject)
   })
 
+const loadSpotifyApi = () => {
+  if (spotifyApiPromise) return spotifyApiPromise
+
+  spotifyApiPromise = new Promise<SpotifyIframeApi>((resolve, reject) => {
+    if (typeof window === 'undefined') {
+      reject(new Error('window unavailable'))
+      return
+    }
+
+    const win = window as YouTubeWindow
+    if (win.SpotifyIframeApi) {
+      resolve(win.SpotifyIframeApi)
+      return
+    }
+
+    const originalOnReady = win.onSpotifyIframeApiReady
+
+    win.onSpotifyIframeApiReady = (iframeApi) => {
+      win.SpotifyIframeApi = iframeApi
+      resolve(iframeApi)
+      originalOnReady?.(iframeApi)
+    }
+
+    loadScript('https://open.spotify.com/embed/iframe-api/v1', 'spotify-iframe-api').catch(reject)
+  })
+
+  return spotifyApiPromise
+}
+
 export const useMusicPlayer = (options: {
   youtubeContainerRef: React.RefObject<HTMLDivElement | null>
   soundcloudContainerRef: React.RefObject<HTMLDivElement | null>
+  spotifyContainerRef: React.RefObject<HTMLDivElement | null>
   onEnded?: () => void
 }): MusicPlayerApi => {
-  const { youtubeContainerRef, soundcloudContainerRef, onEnded } = options
+  const { youtubeContainerRef, soundcloudContainerRef, spotifyContainerRef, onEnded } = options
   const [isPlaying, setIsPlaying] = useState(false)
   const [source, setSource] = useState<MusicSourceType>('unknown')
-  const audioRef = useRef<HTMLAudioElement | null>(null)
   const ytPlayerRef = useRef<YTPlayerInstance | null>(null)
   const scWidgetRef = useRef<SoundCloudWidgetInstance | null>(null)
+  const spotifyControllerRef = useRef<SpotifyEmbedController | null>(null)
   const volumeRef = useRef(0.6)
   const onEndedRef = useRef(onEnded)
 
@@ -163,10 +222,6 @@ export const useMusicPlayer = (options: {
   }, [])
 
   const stopAll = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.currentTime = 0
-    }
     if (ytPlayerRef.current) {
       ytPlayerRef.current.stopVideo()
     }
@@ -174,15 +229,16 @@ export const useMusicPlayer = (options: {
       scWidgetRef.current.pause()
       scWidgetRef.current.seekTo(0)
     }
+    if (spotifyControllerRef.current) {
+      spotifyControllerRef.current.pause()
+      spotifyControllerRef.current.restart()
+    }
     setIsPlaying(false)
   }, [])
 
   const setVolume = useCallback((value: number) => {
     const next = Math.min(1, Math.max(0, value))
     volumeRef.current = next
-    if (audioRef.current) {
-      audioRef.current.volume = next
-    }
     if (ytPlayerRef.current?.setVolume) {
       ytPlayerRef.current.setVolume(Math.round(next * 100))
     }
@@ -190,26 +246,6 @@ export const useMusicPlayer = (options: {
       scWidgetRef.current.setVolume(Math.round(next * 100))
     }
   }, [])
-
-  const playDirect = useCallback(
-    async (url: string) => {
-      stopAll()
-      setSource('direct')
-      if (!audioRef.current) {
-        audioRef.current = new Audio()
-        audioRef.current.onended = () => emitEnded()
-        audioRef.current.onpause = () => setIsPlaying(false)
-        audioRef.current.onplay = () => setIsPlaying(true)
-      }
-      const audio = audioRef.current
-      audio.src = url
-      audio.crossOrigin = 'anonymous'
-      audio.volume = volumeRef.current
-      await audio.play()
-      setIsPlaying(true)
-    },
-    [emitEnded, stopAll],
-  )
 
   const playYouTube = useCallback(
     async (videoId: string) => {
@@ -307,26 +343,72 @@ export const useMusicPlayer = (options: {
     [emitEnded, stopAll, soundcloudContainerRef],
   )
 
+  const playSpotify = useCallback(
+    async (uri: string) => {
+      stopAll()
+      setSource('spotify')
+      const iframeApi = await loadSpotifyApi()
+
+      const container = spotifyContainerRef.current
+      if (!container) {
+        throw new Error('Spotify container missing')
+      }
+
+      if (!spotifyControllerRef.current) {
+        container.replaceChildren()
+        const mount = document.createElement('div')
+        mount.dataset.spotifyEmbedHost = 'true'
+        container.appendChild(mount)
+
+        await new Promise<void>((resolve, reject) => {
+          const timeoutId = window.setTimeout(() => reject(new Error('Spotify API not ready')), 5000)
+          iframeApi.createController(
+            mount,
+            {
+              uri,
+              width: '100%',
+              height: 152,
+            },
+            (controller) => {
+              window.clearTimeout(timeoutId)
+              spotifyControllerRef.current = controller
+              controller.addListener('playback_started', () => setIsPlaying(true))
+              controller.addListener('playback_update', (event) => {
+                const isPaused = Boolean(event.data?.isPaused)
+                const isBuffering = Boolean(event.data?.isBuffering)
+                setIsPlaying(!isPaused && !isBuffering)
+              })
+              controller.loadUri(uri)
+              controller.play()
+              setIsPlaying(true)
+              resolve()
+            },
+          )
+        })
+        return
+      }
+
+      spotifyControllerRef.current.loadUri(uri)
+      spotifyControllerRef.current.play()
+      setIsPlaying(true)
+    },
+    [spotifyContainerRef, stopAll],
+  )
+
   const pause = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause()
-    }
     if (ytPlayerRef.current) {
       ytPlayerRef.current.pauseVideo()
     }
     if (scWidgetRef.current) {
       scWidgetRef.current.pause()
     }
+    if (spotifyControllerRef.current) {
+      spotifyControllerRef.current.pause()
+    }
     setIsPlaying(false)
   }, [])
 
   const resume = useCallback(async () => {
-    if (source === 'direct' && audioRef.current) {
-      await audioRef.current.play()
-      setIsPlaying(true)
-      return
-    }
-
     if (source === 'youtube' && ytPlayerRef.current) {
       ytPlayerRef.current.playVideo()
       setIsPlaying(true)
@@ -335,6 +417,12 @@ export const useMusicPlayer = (options: {
 
     if (source === 'soundcloud' && scWidgetRef.current) {
       scWidgetRef.current.play()
+      setIsPlaying(true)
+      return
+    }
+
+    if (source === 'spotify' && spotifyControllerRef.current) {
+      spotifyControllerRef.current.resume()
       setIsPlaying(true)
     }
   }, [source])
@@ -345,16 +433,15 @@ export const useMusicPlayer = (options: {
 
   useEffect(
     () => () => {
-      if (audioRef.current) {
-        audioRef.current.pause()
-        audioRef.current.src = ''
-        audioRef.current = null
-      }
       if (ytPlayerRef.current) {
         ytPlayerRef.current.stopVideo()
       }
       if (scWidgetRef.current) {
         scWidgetRef.current.pause()
+      }
+      if (spotifyControllerRef.current) {
+        spotifyControllerRef.current.destroy()
+        spotifyControllerRef.current = null
       }
     },
     [],
@@ -364,14 +451,14 @@ export const useMusicPlayer = (options: {
     () => ({
       isPlaying,
       source,
-      playDirect,
       playYouTube,
       playSoundCloud,
+      playSpotify,
       pause,
       resume,
       stop,
       setVolume,
     }),
-    [isPlaying, source, playDirect, playYouTube, playSoundCloud, pause, resume, stop, setVolume],
+    [isPlaying, source, playYouTube, playSoundCloud, playSpotify, pause, resume, stop, setVolume],
   )
 }

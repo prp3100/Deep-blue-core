@@ -107,6 +107,7 @@ import {
 import {
   createEmptyMusicDraft,
   detectSourceType,
+  getSpotifyUri,
   getYouTubeId,
   type MusicDraft,
   type PlaybackMode,
@@ -928,6 +929,7 @@ function AppContent() {
   const [musicIsPlaying, setMusicIsPlaying] = useState(false)
   const youtubeContainerRef = useRef<HTMLDivElement | null>(null)
   const soundcloudContainerRef = useRef<HTMLDivElement | null>(null)
+  const spotifyContainerRef = useRef<HTMLDivElement | null>(null)
   const antiCheatCloseButtonRef = useRef<HTMLButtonElement | null>(null)
   const quizQuestionStartRef = useRef(0)
   const arenaQuestionStartRef = useRef(0)
@@ -953,7 +955,7 @@ function AppContent() {
   const archivedArenaSessionIdRef = useRef<number | null>(null)
   const playedQuizResultSoundSessionRef = useRef<number | null>(null)
   const audio = useQuizAudio(sfxVolume)
-  const musicPlayer = useMusicPlayer({ youtubeContainerRef, soundcloudContainerRef, onEnded: handleMusicPlaybackEnded })
+  const musicPlayer = useMusicPlayer({ youtubeContainerRef, soundcloudContainerRef, spotifyContainerRef, onEnded: handleMusicPlaybackEnded })
 
   const copy = uiText[locale]
   const formatCopy = extraCopy[locale]
@@ -1707,11 +1709,6 @@ function AppContent() {
   }, [view, pendingScrollId])
 
   async function playPlaylistTrack(track: PlaylistItem) {
-    if (track.sourceType === 'direct') {
-      await musicPlayer.playDirect(track.url)
-      return
-    }
-
     if (track.sourceType === 'youtube') {
       const videoId = getYouTubeId(track.url)
       if (!videoId) {
@@ -1723,6 +1720,15 @@ function AppContent() {
 
     if (track.sourceType === 'soundcloud') {
       await musicPlayer.playSoundCloud(track.url)
+      return
+    }
+
+    if (track.sourceType === 'spotify') {
+      const spotifyUri = getSpotifyUri(track.url)
+      if (!spotifyUri) {
+        throw new Error(copy.settingsInvalidUrl)
+      }
+      await musicPlayer.playSpotify(spotifyUri)
       return
     }
 
@@ -3802,6 +3808,7 @@ function AppContent() {
       <div className="sr-only" aria-hidden="true">
         <div ref={youtubeContainerRef} />
         <div ref={soundcloudContainerRef} />
+        <div ref={spotifyContainerRef} />
       </div>
     </AppShell>
   )

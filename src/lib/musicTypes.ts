@@ -1,6 +1,6 @@
 import { isHostnameMatch, sanitizeNetworkUrl } from './signalMask'
 
-export type MusicSourceType = 'direct' | 'youtube' | 'soundcloud' | 'unknown'
+export type MusicSourceType = 'youtube' | 'soundcloud' | 'spotify' | 'unknown'
 
 export type PlaybackMode = 'normal' | 'loop-one' | 'loop-all' | 'shuffle'
 
@@ -30,9 +30,10 @@ export type PlaylistItem = {
   addedAt: number
 }
 
-const audioExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']
 const YOUTUBE_HOSTNAMES = ['youtube.com', 'youtu.be', 'youtube-nocookie.com']
 const SOUNDCLOUD_HOSTNAMES = ['soundcloud.com', 'sndcdn.com']
+const SPOTIFY_HOSTNAMES = ['open.spotify.com', 'spotify.com']
+const SPOTIFY_ENTITY_TYPES = new Set(['track', 'album', 'playlist', 'artist', 'episode', 'show'])
 
 const createId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -71,8 +72,7 @@ export const detectSourceType = (url: string): MusicSourceType => {
   if (!parsed) return 'unknown'
   if (isHostnameMatch(parsed.hostname, YOUTUBE_HOSTNAMES)) return 'youtube'
   if (isHostnameMatch(parsed.hostname, SOUNDCLOUD_HOSTNAMES)) return 'soundcloud'
-  const extension = parsed.pathname.toLowerCase().split('.').pop()
-  if (extension && audioExtensions.includes(extension)) return 'direct'
+  if (getSpotifyUri(url)) return 'spotify'
   return 'unknown'
 }
 
@@ -103,6 +103,28 @@ export const getFilenameTitle = (url: string) => {
 
   const lastSegment = parsed.pathname.split('/').pop() ?? ''
   return lastSegment ? decodeURIComponent(lastSegment) : ''
+}
+
+export const getSpotifyUri = (url: string) => {
+  const parsed = getParsedMusicUrl(url)
+  if (!parsed || !isHostnameMatch(parsed.hostname, SPOTIFY_HOSTNAMES)) {
+    return null
+  }
+
+  const segments = parsed.pathname
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+
+  const normalizedSegments = segments[0]?.toLowerCase().startsWith('intl-') ? segments.slice(1) : segments
+  const entitySegments = normalizedSegments[0]?.toLowerCase() === 'embed' ? normalizedSegments.slice(1) : normalizedSegments
+  const entityType = entitySegments[0]?.toLowerCase()
+  const entityId = entitySegments[1]
+  if (!entityType || !entityId || !SPOTIFY_ENTITY_TYPES.has(entityType)) {
+    return null
+  }
+
+  return `spotify:${entityType}:${entityId}`
 }
 
 export const parseOEmbedTitle = (title: string) => {

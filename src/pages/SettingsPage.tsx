@@ -197,13 +197,13 @@ export function SettingsPage({
       ? copy.settingsSourceYouTube
       : draftTrack.sourceType === 'soundcloud'
         ? copy.settingsSourceSoundCloud
-        : draftTrack.sourceType === 'direct'
-          ? copy.settingsSourceDirect
+        : draftTrack.sourceType === 'spotify'
+          ? copy.settingsSourceSpotify
           : copy.settingsSourceUnknown
   const sourceLabels = {
-    direct: copy.settingsSourceDirect,
     youtube: copy.settingsSourceYouTube,
     soundcloud: copy.settingsSourceSoundCloud,
+    spotify: copy.settingsSourceSpotify,
     unknown: copy.settingsSourceUnknown,
   }
   const playbackLabels = {
@@ -233,7 +233,7 @@ export function SettingsPage({
   const handleFetchMetadata = async (): Promise<{ title: string; artist: string; thumbnailUrl: string } | null> => {
     const normalizedUrl = normalizeMusicUrl(draftTrack.url)
     const sourceType = detectSourceType(normalizedUrl)
-    if ((sourceType !== 'youtube' && sourceType !== 'soundcloud') || !normalizedUrl) return null
+    if ((sourceType !== 'youtube' && sourceType !== 'soundcloud' && sourceType !== 'spotify') || !normalizedUrl) return null
 
     updateIfMounted(() => {
       setIsLoadingMeta(true)
@@ -244,7 +244,9 @@ export function SettingsPage({
       const endpoint =
         sourceType === 'youtube'
           ? `https://www.youtube.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`
-          : `https://soundcloud.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`
+          : sourceType === 'soundcloud'
+            ? `https://soundcloud.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`
+            : `https://open.spotify.com/oembed?url=${encodeURIComponent(normalizedUrl)}`
       const response = await fetch(endpoint, createPrivacyPreservingRequestInit())
       if (!response.ok) throw new Error(copy.settingsMetadataError)
 
@@ -411,7 +413,7 @@ export function SettingsPage({
     let resolvedArtist = draftTrack.artist
     let thumbnailUrl = ''
 
-    if (normalizedSourceType === 'youtube' || normalizedSourceType === 'soundcloud') {
+    if (normalizedSourceType === 'youtube' || normalizedSourceType === 'soundcloud' || normalizedSourceType === 'spotify') {
       const metadata = await handleFetchMetadata()
       if (analysisToken !== latestAnalysisToken || !matchesCurrentDraftUrl(requestedUrl, currentDraftUrlRef.current)) {
         throw new Error(copy.settingsTrackChanged)
