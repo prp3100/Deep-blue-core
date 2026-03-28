@@ -1,3 +1,5 @@
+import { isHostnameMatch, sanitizeNetworkUrl } from './signalMask'
+
 export type MusicSourceType = 'direct' | 'youtube' | 'soundcloud' | 'unknown'
 
 export type PlaybackMode = 'normal' | 'loop-one' | 'loop-all' | 'shuffle'
@@ -29,6 +31,8 @@ export type PlaylistItem = {
 }
 
 const audioExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']
+const YOUTUBE_HOSTNAMES = ['youtube.com', 'youtu.be', 'youtube-nocookie.com']
+const SOUNDCLOUD_HOSTNAMES = ['soundcloud.com', 'sndcdn.com']
 
 const createId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -47,20 +51,39 @@ export const createEmptyMusicDraft = (): MusicDraft => ({
   aiBaseHex: '',
 })
 
+export const normalizeMusicUrl = (url: string) => sanitizeNetworkUrl(url, { allowHttpLoopback: true })
+
+const getParsedMusicUrl = (url: string) => {
+  const normalized = normalizeMusicUrl(url)
+  if (!normalized) {
+    return null
+  }
+
+  try {
+    return new URL(normalized)
+  } catch {
+    return null
+  }
+}
+
 export const detectSourceType = (url: string): MusicSourceType => {
-  if (!url) return 'unknown'
-  const lower = url.toLowerCase()
-  if (lower.includes('youtube.com') || lower.includes('youtu.be')) return 'youtube'
-  if (lower.includes('soundcloud.com')) return 'soundcloud'
-  const extension = lower.split('?')[0].split('#')[0].split('.').pop()
+  const parsed = getParsedMusicUrl(url)
+  if (!parsed) return 'unknown'
+  if (isHostnameMatch(parsed.hostname, YOUTUBE_HOSTNAMES)) return 'youtube'
+  if (isHostnameMatch(parsed.hostname, SOUNDCLOUD_HOSTNAMES)) return 'soundcloud'
+  const extension = parsed.pathname.toLowerCase().split('.').pop()
   if (extension && audioExtensions.includes(extension)) return 'direct'
   return 'unknown'
 }
 
 export const getYouTubeId = (url: string) => {
+  const parsed = getParsedMusicUrl(url)
+  if (!parsed || !isHostnameMatch(parsed.hostname, YOUTUBE_HOSTNAMES)) {
+    return null
+  }
+
   try {
-    const parsed = new URL(url)
-    if (parsed.hostname.includes('youtu.be')) return parsed.pathname.replace('/', '')
+    if (isHostnameMatch(parsed.hostname, ['youtu.be'])) return parsed.pathname.replace('/', '')
     if (parsed.searchParams.get('v')) return parsed.searchParams.get('v')
     const paths = parsed.pathname.split('/')
     const embedIndex = paths.findIndex((segment) => segment === 'embed' || segment === 'shorts')
@@ -73,13 +96,13 @@ export const getYouTubeId = (url: string) => {
 }
 
 export const getFilenameTitle = (url: string) => {
-  try {
-    const parsed = new URL(url)
-    const lastSegment = parsed.pathname.split('/').pop() ?? ''
-    return lastSegment ? decodeURIComponent(lastSegment) : ''
-  } catch {
+  const parsed = getParsedMusicUrl(url)
+  if (!parsed) {
     return ''
   }
+
+  const lastSegment = parsed.pathname.split('/').pop() ?? ''
+  return lastSegment ? decodeURIComponent(lastSegment) : ''
 }
 
 export const parseOEmbedTitle = (title: string) => {
@@ -93,8 +116,8 @@ export const parseOEmbedTitle = (title: string) => {
 
 export const createPlaylistItem = (draft: MusicDraft): PlaylistItem => ({
   id: createId(),
-  url: draft.url,
-  sourceType: draft.sourceType,
+  url: normalizeMusicUrl(draft.url),
+  sourceType: detectSourceType(draft.url),
   title: draft.title,
   artist: draft.artist,
   aiMood: draft.aiMood,

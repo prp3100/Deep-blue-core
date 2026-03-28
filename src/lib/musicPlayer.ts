@@ -80,6 +80,8 @@ const loadScript = (src: string, id: string) =>
     script.id = id
     script.src = src
     script.async = true
+    script.crossOrigin = 'anonymous'
+    script.referrerPolicy = 'no-referrer'
     script.dataset.loaded = 'false'
     script.onload = () => {
       script.dataset.loaded = 'true'

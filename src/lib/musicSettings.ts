@@ -4,6 +4,8 @@ import {
   coerceThemeMotionMode,
   coerceThemePresetId,
   createEmptyMusicDraft,
+  detectSourceType,
+  normalizeMusicUrl,
   type MusicDraft,
   type PlaybackMode,
   type PlaylistItem,
@@ -42,6 +44,8 @@ type LegacyMusicSettingsStorage = {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
+const normalizeStoredTrackUrl = (value: unknown) => (typeof value === 'string' ? normalizeMusicUrl(value) : '')
+
 export const createDefaultMusicSettings = (): MusicSettingsStorage => ({
   version: 2,
   draftTrack: createEmptyMusicDraft(),
@@ -69,10 +73,16 @@ const toPlaylistItem = (value: unknown): PlaylistItem | null => {
     return null
   }
 
+  const normalizedUrl = normalizeStoredTrackUrl(item.url)
+  const normalizedSourceType = detectSourceType(normalizedUrl)
+  if (!normalizedUrl || normalizedSourceType === 'unknown') {
+    return null
+  }
+
   return {
     id: typeof item.id === 'string' ? item.id : `track-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`,
-    url: item.url,
-    sourceType: item.sourceType,
+    url: normalizedUrl,
+    sourceType: normalizedSourceType,
     title: typeof item.title === 'string' ? item.title : '',
     artist: typeof item.artist === 'string' ? item.artist : '',
     aiMood: typeof item.aiMood === 'string' ? item.aiMood : '',
@@ -82,6 +92,30 @@ const toPlaylistItem = (value: unknown): PlaylistItem | null => {
 }
 
 const toQueue = (value: unknown) => (Array.isArray(value) ? value.map(toPlaylistItem).filter((item): item is PlaylistItem => Boolean(item)) : [])
+
+const toDraftTrack = (value: unknown): MusicDraft => {
+  const defaults = createEmptyMusicDraft()
+  if (!value || typeof value !== 'object') {
+    return defaults
+  }
+
+  const item = value as Partial<MusicDraft>
+  const url = normalizeStoredTrackUrl(item.url)
+  const sourceType = detectSourceType(url)
+
+  if (!url || sourceType === 'unknown') {
+    return defaults
+  }
+
+  return {
+    url,
+    sourceType,
+    title: typeof item.title === 'string' ? item.title : '',
+    artist: typeof item.artist === 'string' ? item.artist : '',
+    aiMood: typeof item.aiMood === 'string' ? item.aiMood : '',
+    aiBaseHex: typeof item.aiBaseHex === 'string' ? item.aiBaseHex : '',
+  }
+}
 
 const withQueueConsistency = (settings: MusicSettingsStorage): MusicSettingsStorage => {
   const queue = settings.queue
@@ -106,8 +140,8 @@ const withQueueConsistency = (settings: MusicSettingsStorage): MusicSettingsStor
 
 const migrateLegacySettings = (legacy: LegacyMusicSettingsStorage): MusicSettingsStorage => {
   const defaults = createDefaultMusicSettings()
-  const url = typeof legacy.url === 'string' ? legacy.url : ''
-  const sourceType = legacy.sourceType ?? 'unknown'
+  const url = normalizeStoredTrackUrl(legacy.url)
+  const sourceType = detectSourceType(url)
   const title = typeof legacy.title === 'string' ? legacy.title : ''
   const artist = typeof legacy.artist === 'string' ? legacy.artist : ''
   const aiMood = typeof legacy.aiMood === 'string' ? legacy.aiMood : ''
@@ -162,10 +196,7 @@ export const parseStoredMusicSettings = (storedValue: string | null): MusicSetti
     return withQueueConsistency({
       ...defaults,
       version: 2,
-      draftTrack: {
-        ...defaults.draftTrack,
-        ...(parsed.draftTrack ?? {}),
-      },
+      draftTrack: toDraftTrack(parsed.draftTrack),
       activeTrack: toPlaylistItem(parsed.activeTrack),
       queue: toQueue(parsed.queue),
       queueIndex: typeof parsed.queueIndex === 'number' ? parsed.queueIndex : -1,

@@ -1,3 +1,5 @@
+import { createPrivacyPreservingRequestInit, sanitizeNetworkUrl } from './signalMask'
+
 export type LocalizedText = {
   th: string
   en: string
@@ -947,12 +949,19 @@ export const parseStoredArenaAiSettings = (rawValue: string | null): ArenaAiSett
       typeof parsed.providerId === 'string' && providerMap.has(parsed.providerId as ArenaAiProviderId)
         ? getArenaAiProvider(parsed.providerId as ArenaAiProviderId)
         : getArenaAiProvider(fallback.providerId)
+    const extraFieldValue = typeof parsed.extraFieldValue === 'string' ? parsed.extraFieldValue : ''
+    const parsedBaseUrl = typeof parsed.apiBaseUrl === 'string' && parsed.apiBaseUrl.trim() ? parsed.apiBaseUrl : provider.defaultBaseUrl
+    const safeBaseUrl = resolveArenaAiBaseUrl({
+      providerId: provider.id,
+      apiBaseUrl: parsedBaseUrl,
+      extraFieldValue,
+    })
 
     return {
       providerId: provider.id,
-      apiBaseUrl: typeof parsed.apiBaseUrl === 'string' && parsed.apiBaseUrl.trim() ? parsed.apiBaseUrl : provider.defaultBaseUrl,
+      apiBaseUrl: safeBaseUrl ? parsedBaseUrl : provider.defaultBaseUrl,
       modelId: typeof parsed.modelId === 'string' && parsed.modelId.trim() ? parsed.modelId : provider.defaultModelId,
-      extraFieldValue: typeof parsed.extraFieldValue === 'string' ? parsed.extraFieldValue : '',
+      extraFieldValue,
     }
   } catch {
     return fallback
@@ -968,7 +977,14 @@ export const resolveArenaAiBaseUrl = (settings: Pick<ArenaAiSettings, 'providerI
   const provider = getArenaAiProvider(settings.providerId)
   const candidate = settings.apiBaseUrl.trim() || provider.defaultBaseUrl
   const resolved = interpolateBaseUrl(candidate, settings.extraFieldValue)
-  return resolved.includes('{accountId}') ? '' : trimTrailingSlash(resolved)
+  const sanitized = resolved.includes('{accountId}')
+    ? ''
+    : sanitizeNetworkUrl(resolved, {
+        allowHttpLoopback: true,
+        stripSearch: true,
+        stripHash: true,
+      })
+  return sanitized ? trimTrailingSlash(sanitized) : ''
 }
 
 export const createArenaAiSettingsForProvider = (providerId: ArenaAiProviderId): ArenaAiSettings => {
@@ -1234,13 +1250,13 @@ export const discoverArenaModels = async ({ config, signal }: DiscoverArenaModel
   }
 
   if (provider.modelDiscoveryStrategy === 'anthropic-models') {
-    const response = await fetch(`${baseUrl}/models`, {
+    const response = await fetch(`${baseUrl}/models`, createPrivacyPreservingRequestInit({
       headers: {
         'x-api-key': config.apiKey,
         'anthropic-version': '2023-06-01',
       },
       signal,
-    })
+    }))
 
     if (!response.ok) {
       throw await getResponseError(response)
@@ -1259,7 +1275,10 @@ export const discoverArenaModels = async ({ config, signal }: DiscoverArenaModel
   }
 
   if (provider.modelDiscoveryStrategy === 'google-models') {
-    const response = await fetch(`${baseUrl}/models?key=${encodeURIComponent(config.apiKey)}`, { signal })
+    const response = await fetch(
+      `${baseUrl}/models?key=${encodeURIComponent(config.apiKey)}`,
+      createPrivacyPreservingRequestInit({ signal }),
+    )
 
     if (!response.ok) {
       throw await getResponseError(response)
@@ -1282,12 +1301,12 @@ export const discoverArenaModels = async ({ config, signal }: DiscoverArenaModel
     return normalizeDiscoveredModels(records, { config, signal })
   }
 
-  const response = await fetch(`${baseUrl}/models`, {
+  const response = await fetch(`${baseUrl}/models`, createPrivacyPreservingRequestInit({
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
     },
     signal,
-  })
+  }))
 
   if (!response.ok) {
     throw await getResponseError(response)
@@ -1420,7 +1439,7 @@ const requestAiTextOnce = async ({
         ]
 
     for (let index = 0; index < requestBodies.length; index += 1) {
-      const response = await fetch(`${baseUrl}/messages`, {
+      const response = await fetch(`${baseUrl}/messages`, createPrivacyPreservingRequestInit({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1429,7 +1448,7 @@ const requestAiTextOnce = async ({
         },
         body: JSON.stringify(requestBodies[index]),
         signal,
-      })
+      }))
 
       if (!response.ok) {
         const error = await getResponseError(response)
@@ -1532,14 +1551,17 @@ const requestAiTextOnce = async ({
         ]
 
     for (let index = 0; index < requestBodies.length; index += 1) {
-      const response = await fetch(`${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBodies[index]),
-        signal,
-      })
+      const response = await fetch(
+        `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`,
+        createPrivacyPreservingRequestInit({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBodies[index]),
+          signal,
+        }),
+      )
 
       if (!response.ok) {
         const error = await getResponseError(response)
@@ -1601,7 +1623,7 @@ const requestAiTextOnce = async ({
     : [openAiBaseBody]
 
   for (let index = 0; index < requestBodies.length; index += 1) {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
+    const response = await fetch(`${baseUrl}/chat/completions`, createPrivacyPreservingRequestInit({
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
@@ -1609,7 +1631,7 @@ const requestAiTextOnce = async ({
       },
       body: JSON.stringify(requestBodies[index]),
       signal,
-    })
+    }))
 
     if (!response.ok) {
       const error = await getResponseError(response)

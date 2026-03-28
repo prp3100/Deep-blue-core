@@ -19,11 +19,14 @@ import { uiText } from '../lib/i18n'
 import { panelClass } from '../components/layout/panelClasses'
 import { extractDominantColor } from '../lib/colorUtils'
 import type { AIWorkerRequest, AIWorkerResponse } from '../lib/aiWorker'
+import { createPrivacyPreservingRequestInit } from '../lib/signalMask'
 import { getThemePreset, SYSTEM_BASE_THEME } from '../lib/musicTheme'
 import {
   createPlaylistItem,
+  detectSourceType,
   getFilenameTitle,
   getTrackDisplayName,
+  normalizeMusicUrl,
   parseOEmbedTitle,
   type MusicDraft,
   type PlaybackMode,
@@ -47,6 +50,8 @@ const normalizeAnalysisText = (value: string) =>
 
 const getAnalysisCacheKey = (track: Pick<MusicDraft, 'url' | 'title' | 'artist'>) =>
   [normalizeAnalysisText(track.url), normalizeAnalysisText(track.title), normalizeAnalysisText(track.artist)].join('::')
+
+const matchesCurrentDraftUrl = (requestedUrl: string, currentUrl: string) => normalizeMusicUrl(currentUrl) === requestedUrl
 
 const getMusicAiWorker = async () => {
   if (typeof window === 'undefined') {
@@ -226,7 +231,9 @@ export function SettingsPage({
   const hasTrackPalette = Boolean(autoThemeBase && (draftTrack.aiMood || activeTrack?.aiMood || ''))
 
   const handleFetchMetadata = async (): Promise<{ title: string; artist: string; thumbnailUrl: string } | null> => {
-    if (draftTrack.sourceType !== 'youtube' && draftTrack.sourceType !== 'soundcloud') return null
+    const normalizedUrl = normalizeMusicUrl(draftTrack.url)
+    const sourceType = detectSourceType(normalizedUrl)
+    if ((sourceType !== 'youtube' && sourceType !== 'soundcloud') || !normalizedUrl) return null
 
     updateIfMounted(() => {
       setIsLoadingMeta(true)
@@ -235,10 +242,10 @@ export function SettingsPage({
 
     try {
       const endpoint =
-        draftTrack.sourceType === 'youtube'
-          ? `https://www.youtube.com/oembed?url=${encodeURIComponent(draftTrack.url)}&format=json`
-          : `https://soundcloud.com/oembed?url=${encodeURIComponent(draftTrack.url)}&format=json`
-      const response = await fetch(endpoint)
+        sourceType === 'youtube'
+          ? `https://www.youtube.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`
+          : `https://soundcloud.com/oembed?url=${encodeURIComponent(normalizedUrl)}&format=json`
+      const response = await fetch(endpoint, createPrivacyPreservingRequestInit())
       if (!response.ok) throw new Error(copy.settingsMetadataError)
 
       const data = (await response.json()) as { title?: string; author_name?: string; thumbnail_url?: string }
@@ -300,7 +307,7 @@ export function SettingsPage({
         }
 
         analysisCache.set(cacheKey, { mood: detectedMood, hex: detectedHex })
-        const isStale = analysisToken !== latestAnalysisToken || currentDraftUrlRef.current !== requestedUrl
+        const isStale = analysisToken !== latestAnalysisToken || !matchesCurrentDraftUrl(requestedUrl, currentDraftUrlRef.current)
         if (isStale) {
           resolve({ mood: detectedMood, hex: detectedHex })
           return
@@ -391,19 +398,22 @@ export function SettingsPage({
     setErrorMessage(null)
     setMetadataMessage(null)
 
-    if (!draftTrack.url || draftTrack.sourceType === 'unknown') {
+    const normalizedUrl = normalizeMusicUrl(draftTrack.url)
+    const normalizedSourceType = detectSourceType(normalizedUrl)
+
+    if (!normalizedUrl || normalizedSourceType === 'unknown') {
       throw new Error(copy.settingsInvalidUrl)
     }
 
-    const requestedUrl = draftTrack.url
+    const requestedUrl = normalizedUrl
     const analysisToken = ++latestAnalysisToken
     let resolvedTitle = draftTrack.title
     let resolvedArtist = draftTrack.artist
     let thumbnailUrl = ''
 
-    if (draftTrack.sourceType === 'youtube' || draftTrack.sourceType === 'soundcloud') {
+    if (normalizedSourceType === 'youtube' || normalizedSourceType === 'soundcloud') {
       const metadata = await handleFetchMetadata()
-      if (analysisToken !== latestAnalysisToken || currentDraftUrlRef.current !== requestedUrl) {
+      if (analysisToken !== latestAnalysisToken || !matchesCurrentDraftUrl(requestedUrl, currentDraftUrlRef.current)) {
         throw new Error(copy.settingsTrackChanged)
       }
 
@@ -414,18 +424,18 @@ export function SettingsPage({
         if (!resolvedArtist) resolvedArtist = metadata.artist || parsed.artist
       }
     } else if (!resolvedTitle) {
-      const fallbackTitle = getFilenameTitle(draftTrack.url)
+      const fallbackTitle = getFilenameTitle(requestedUrl)
       if (fallbackTitle) resolvedTitle = fallbackTitle
     }
 
     const analysis = await runAiAnalysis(resolvedTitle, resolvedArtist, thumbnailUrl, analysisToken, requestedUrl)
-    if (analysisToken !== latestAnalysisToken || currentDraftUrlRef.current !== requestedUrl) {
+    if (analysisToken !== latestAnalysisToken || !matchesCurrentDraftUrl(requestedUrl, currentDraftUrlRef.current)) {
       throw new Error(copy.settingsTrackChanged)
     }
 
     const nextDraft: MusicDraft = {
-      url: draftTrack.url,
-      sourceType: draftTrack.sourceType,
+      url: requestedUrl,
+      sourceType: normalizedSourceType,
       title: resolvedTitle,
       artist: resolvedArtist,
       aiMood: analysis.mood,

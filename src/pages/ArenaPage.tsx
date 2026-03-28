@@ -601,7 +601,8 @@ export function ArenaPage({
                   <a
                     href={provider.docsUrl}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
+                    referrerPolicy="no-referrer"
                     className="inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--surface-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--ink)] transition hover:bg-[var(--surface-hover)]"
                   >
                     <ExternalLink size={13} />
