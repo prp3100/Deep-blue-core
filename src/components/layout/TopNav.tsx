@@ -28,6 +28,7 @@ export function TopNav({
   navLocked = false,
 }: TopNavProps) {
   const copy = uiText[locale]
+  const brandIconUrl = `${import.meta.env.BASE_URL}site-icon.png`
   const navItems = [
     { id: sectionIds[0], label: copy.navHome },
     { id: sectionIds[1], label: copy.navPrograms },
@@ -39,7 +40,7 @@ export function TopNav({
     <header className={clsx('top-nav', isLanding ? 'top-nav--landing' : 'top-nav--compact')}>
       <div className="top-nav__brand">
         <span className="top-nav__logo" aria-hidden="true">
-          <img src="/site-icon.png" alt="" className="top-nav__logo-image" />
+          <img src={brandIconUrl} alt="" className="top-nav__logo-image" />
         </span>
         <div>
           <p className="top-nav__title">{copy.appTitle}</p>
